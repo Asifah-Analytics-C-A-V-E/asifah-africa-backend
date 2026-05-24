@@ -1,0 +1,124 @@
+# ════════════════════════════════════════════════════════════════
+#  asifah-africa-backend / .gitignore
+#  Last updated: May 24, 2026
+# ════════════════════════════════════════════════════════════════
+#  CRITICAL: this file is the first line of defense against
+#  accidentally committing secrets to a PUBLIC repo. Anything that
+#  could contain credentials, session data, or local cache should
+#  be listed here BEFORE any code goes in.
+# ════════════════════════════════════════════════════════════════
+
+# ── Environment & secrets ─────────────────────────────────────
+.env
+.env.*
+*.env
+.env.local
+.env.production
+.env.development
+secrets.json
+config.local.*
+
+# ── Telegram / Telethon sessions ──────────────────────────────
+# Session files hold credentialed authentication state.
+# NEVER commit one of these — even briefly.
+*.session
+*.session-journal
+asifah_africa_telegram*.session*
+telegram_*.session*
+
+# ── Asifah-specific cache files ───────────────────────────────
+# These are runtime-generated /tmp dumps. Local-dev convenience
+# only — never canonical.
+*_cache.json
+africa_*_cache.json
+commodity_*_cache.json
+/tmp/*
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ── Virtual environments ──────────────────────────────────────
+venv/
+env/
+ENV/
+.venv/
+.virtualenv/
+pyvenv.cfg
+
+# ── Testing & coverage ────────────────────────────────────────
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# ── Jupyter / IPython notebooks ───────────────────────────────
+.ipynb_checkpoints
+*.ipynb
+
+# ── OS / Editor noise ─────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+logs/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ── Render-specific ───────────────────────────────────────────
+# Render handles its own deployment artifacts; don't commit
+# anything that might look like build output.
+.render-buildpacks/
+.render-build/
+
+# ── Local dev artifacts ───────────────────────────────────────
+*.bak
+*.backup
+*.orig
+*.tmp
+.scratch/
+TODO.local.md
+NOTES.local.md

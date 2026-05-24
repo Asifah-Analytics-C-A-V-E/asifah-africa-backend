@@ -1,0 +1,39 @@
+# ════════════════════════════════════════════════════════════════
+#  asifah-africa-backend / requirements.txt
+#  Last updated: May 24, 2026
+# ════════════════════════════════════════════════════════════════
+#  Pinned dependencies for Africa backend. Matches the canonical
+#  set used by ME, Europe, Asia, and WHA backends, with the same
+#  versions for cross-backend consistency.
+#
+#  WHEN ADDING NEW DEPS: pin the version. Unpinned deps cause
+#  reproducibility issues across Render rebuilds.
+# ════════════════════════════════════════════════════════════════
+
+# ── Core web framework ────────────────────────────────────────
+Flask==3.0.0
+flask-cors==4.0.0
+gunicorn==21.2.0
+Werkzeug==3.0.1
+
+# ── HTTP / networking ─────────────────────────────────────────
+requests==2.31.0
+urllib3==2.1.0
+
+# ── Telegram OSINT ingestion ──────────────────────────────────
+# Telethon is the Telegram MTProto client; cryptg accelerates
+# decryption on Render's shared CPU.
+Telethon==1.34.0
+cryptg==0.4.0
+
+# ── Date / time handling ──────────────────────────────────────
+python-dateutil==2.8.2
+
+# ── XML / RSS parsing ─────────────────────────────────────────
+# Standard library xml.etree is used for most parsing; feedparser
+# only added if a tracker needs Atom-specific features.
+# feedparser==6.0.11   # uncomment if needed by a future tracker
+
+# ── JSON path / data manipulation (optional, defensive) ───────
+# Not strictly required but useful for tracker-side data wrangling.
+# Add only if a specific tracker imports it.
