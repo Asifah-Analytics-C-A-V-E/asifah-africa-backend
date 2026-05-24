@@ -1,0 +1,1400 @@
+"""
+Asifah Analytics -- Africa Backend v1.0.0
+May 24, 2026
+
+Flask backend for the Africa / AFRICOM regional dashboard.
+
+LAUNCH COVERAGE (14 countries):
+  DRC, Uganda, Rwanda, South Sudan, Kenya, Tanzania, Sudan, Ethiopia,
+  Somalia, Nigeria, Mali, Niger, Burkina Faso, South Africa
+
+DELIBERATELY EXCLUDED (canonical in MENA):
+  Morocco, Libya, Egypt -- live in asifah-backend (ME) and are
+  mirrored on the Africa dashboard via Redis fingerprint linkage.
+
+ARCHITECTURE (mirrors WHA / ME / Europe / Asia pattern):
+  - Upstash Redis (REST via requests) -- persistent cache across cold starts
+  - /tmp file fallback when Redis unavailable
+  - Background refresh every 12 hours (daemon thread)
+  - force=true query param bypasses cache for manual OSINT scans
+  - All tracker / source-module imports wrapped in try/except so the
+    backend boots cleanly even before rhetoric trackers, regional BLUF,
+    and per-country modules ship
+
+ENDPOINTS:
+  /health                                -- service health check
+  /debug/routes                          -- route inventory
+  /api/africa/threat/<country>           -- conflict probability + OSINT scan
+  /api/africa/threat/<country>?force=true -- force rescan
+  /api/africa/stability/<country>        -- stability summary card data
+
+CONFLICT % BASE SCORES (higher = worse, calibrated May 24 2026):
+  sudan        88   -- active war, IPC Phase 5 famine, RSF/SAF
+  somalia      72   -- al-shabaab control of significant rural territory
+  south_sudan  68   -- 2026 peace process, displacement, oil dependency
+  drc          65   -- ebola PHEIC + M23 + Wagner-adjacent dynamics
+  burkina_faso 60   -- junta consolidation, JNIM advance
+  mali         60   -- junta + Wagner, JNIM advance, UN withdrawal aftermath
+  niger        58   -- junta, Wagner pivot, uranium/France stress
+  nigeria      45   -- Boko Haram, ISWAP, oil delta, currency
+  ethiopia     42   -- Tigray aftershocks, Amhara, Eritrea tension, GERD
+  uganda       30   -- ebola spread, succession dynamics
+  rwanda       28   -- ebola response + M23 exposure
+  kenya        22   -- ebola border, Somalia spillover, Haiti deployment
+  tanzania     16   -- ebola border, otherwise stable
+  south_africa 25   -- diamond/sanctions exposure, energy crisis, ICJ posture
+
+COPYRIGHT 2025-2026 Asifah Analytics. All rights reserved.
+Not for operational use.
+"""
+
+# ============================================================
+# IMPORTS
+# ============================================================
+import os
+import json
+import time
+import threading
+import requests
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
+# ── Soft-fail wrappers for source modules (Round 2 + later) ──
+# Each module is wrapped so the backend boots even before the
+# module exists in this repo. Once a module is added, just push it
+# to the repo and Render auto-deploy picks it up; the try-block
+# below will succeed on next boot.
+
+try:
+    from telegram_signals_africa import (
+        fetch_sudan_telegram_signals,
+        fetch_drc_telegram_signals,
+        fetch_uganda_telegram_signals,
+        fetch_ethiopia_telegram_signals,
+        fetch_nigeria_telegram_signals,
+        fetch_mali_telegram_signals,
+        fetch_kenya_telegram_signals,
+        fetch_southafrica_telegram_signals,
+    )
+    TELEGRAM_AFRICA_AVAILABLE = True
+    print("[Africa] ✅ telegram_signals_africa loaded")
+except ImportError as e:
+    TELEGRAM_AFRICA_AVAILABLE = False
+    print(f"[Africa] ⚠️ telegram_signals_africa not available: {e}")
+
+try:
+    from bluesky_signals_africa import (
+        fetch_sudan_bluesky_signals,
+        fetch_drc_bluesky_signals,
+        fetch_uganda_bluesky_signals,
+        fetch_ethiopia_bluesky_signals,
+        fetch_nigeria_bluesky_signals,
+        fetch_southafrica_bluesky_signals,
+    )
+    BLUESKY_AFRICA_AVAILABLE = True
+    print("[Africa] ✅ bluesky_signals_africa loaded")
+except ImportError as e:
+    BLUESKY_AFRICA_AVAILABLE = False
+    print(f"[Africa] ⚠️ bluesky_signals_africa not available: {e}")
+
+try:
+    from commodity_proxy_africa import register_africa_commodity_proxy
+    COMMODITY_PROXY_AVAILABLE = True
+    print("[Africa] ✅ commodity_proxy_africa loaded")
+except ImportError as e:
+    COMMODITY_PROXY_AVAILABLE = False
+    print(f"[Africa] ⚠️ commodity_proxy_africa not available: {e}")
+
+try:
+    from convergence_proxy_africa import register_africa_convergence_proxy
+    CONVERGENCE_PROXY_AVAILABLE = True
+    print("[Africa] ✅ convergence_proxy_africa loaded")
+except ImportError as e:
+    CONVERGENCE_PROXY_AVAILABLE = False
+    print(f"[Africa] ⚠️ convergence_proxy_africa not available: {e}")
+
+# ── Future imports (rhetoric trackers, regional BLUF) ──
+# These will fill in over future rounds. Each wrapped in try/except.
+
+try:
+    from rhetoric_tracker_sudan import (
+        register_sudan_rhetoric_endpoints,
+        start_background_refresh as start_sudan_rhetoric_refresh,
+    )
+    SUDAN_RHETORIC_AVAILABLE = True
+    print("[Africa] ✅ rhetoric_tracker_sudan loaded")
+except ImportError as e:
+    SUDAN_RHETORIC_AVAILABLE = False
+    print(f"[Africa] ⚠️ rhetoric_tracker_sudan not yet available: {e}")
+
+try:
+    from africa_regional_bluf import register_africa_bluf_routes
+    AFRICA_BLUF_AVAILABLE = True
+    print("[Africa] ✅ africa_regional_bluf loaded")
+except ImportError as e:
+    AFRICA_BLUF_AVAILABLE = False
+    print(f"[Africa] ⚠️ africa_regional_bluf not yet available: {e}")
+
+
+# ============================================================
+# FLASK APP
+# ============================================================
+
+app = Flask(__name__)
+CORS(app)
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+GDELT_BASE_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
+NEWSAPI_KEY    = os.environ.get('NEWSAPI_KEY')
+BRAVE_API_KEY  = os.environ.get('BRAVE_API_KEY')
+
+UPSTASH_REDIS_URL   = os.environ.get('UPSTASH_REDIS_URL')
+UPSTASH_REDIS_TOKEN = os.environ.get('UPSTASH_REDIS_TOKEN')
+
+CACHE_TTL_HOURS    = 12
+SCAN_TIMEOUT_SEC   = 90        # max scan time per country before bailing out
+RENDER_DEPLOY_TAG  = 'asifa-africa-backend'
+
+# /tmp fallback cache directory
+FILE_CACHE_DIR = Path('/tmp/africa_cache')
+FILE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# REDIS HELPERS (mirrors WHA pattern)
+# ============================================================
+
+def _redis_get(key):
+    if not (UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN):
+        return None
+    try:
+        r = requests.get(
+            f'{UPSTASH_REDIS_URL}/get/{key}',
+            headers={'Authorization': f'Bearer {UPSTASH_REDIS_TOKEN}'},
+            timeout=5,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if data.get('result') is None:
+            return None
+        return json.loads(data['result'])
+    except Exception as e:
+        print(f'[Africa Redis] GET {key} error: {str(e)[:120]}')
+        return None
+
+
+def _redis_set(key, value, ttl_seconds=None):
+    if not (UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN):
+        return False
+    try:
+        payload = ['SET', key, json.dumps(value)]
+        if ttl_seconds:
+            payload.extend(['EX', str(ttl_seconds)])
+        r = requests.post(
+            UPSTASH_REDIS_URL,
+            headers={'Authorization': f'Bearer {UPSTASH_REDIS_TOKEN}'},
+            json=payload,
+            timeout=5,
+        )
+        return r.status_code == 200
+    except Exception as e:
+        print(f'[Africa Redis] SET {key} error: {str(e)[:120]}')
+        return False
+
+
+# ============================================================
+# FILE CACHE FALLBACK
+# ============================================================
+
+def _file_cache_path(key):
+    safe = key.replace('/', '_').replace(':', '_')
+    return FILE_CACHE_DIR / f'{safe}.json'
+
+
+def _file_get(key):
+    try:
+        path = _file_cache_path(key)
+        if not path.exists():
+            return None
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f'[Africa FileCache] GET {key} error: {str(e)[:120]}')
+        return None
+
+
+def _file_set(key, value):
+    try:
+        path = _file_cache_path(key)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(value, f)
+        return True
+    except Exception as e:
+        print(f'[Africa FileCache] SET {key} error: {str(e)[:120]}')
+        return False
+
+
+def cache_get(key):
+    """Redis-first, file-cache fallback."""
+    value = _redis_get(key)
+    if value is not None:
+        return value
+    return _file_get(key)
+
+
+def cache_set(key, value):
+    """Write to both Redis and file cache (for resilience)."""
+    _redis_set(key, value, ttl_seconds=CACHE_TTL_HOURS * 3600)
+    _file_set(key, value)
+
+
+def is_cache_fresh(cached_data, max_hours=None):
+    """Check whether a cached payload is still within TTL."""
+    if not cached_data:
+        return False
+    ttl = max_hours if max_hours is not None else CACHE_TTL_HOURS
+    try:
+        cached_at = cached_data.get('cached_at')
+        if not cached_at:
+            return False
+        cached_dt = datetime.fromisoformat(cached_at.replace('Z', '+00:00'))
+        age = datetime.now(timezone.utc) - cached_dt
+        return age < timedelta(hours=ttl)
+    except Exception:
+        return False
+
+
+# ============================================================
+# GDELT CIRCUIT BREAKER
+# ============================================================
+# Lifted from WHA pattern: GDELT periodically returns 429 or times
+# out for runs. Short-circuit after the first failure of a country
+# scan to avoid hanging.
+
+_gdelt_failed_this_scan = False
+
+
+def _reset_gdelt_circuit():
+    global _gdelt_failed_this_scan
+    _gdelt_failed_this_scan = False
+
+
+def fetch_gdelt(query, days=7, language='eng', max_records=50):
+    """Fetch GDELT articles. Short-circuits after first failure per scan."""
+    global _gdelt_failed_this_scan
+    if _gdelt_failed_this_scan:
+        return []
+    params = {
+        'query':      f'"{query}" sourcelang:{language}',
+        'mode':       'ArtList',
+        'format':     'JSON',
+        'maxrecords': str(max_records),
+        'timespan':   f'{days}d',
+        'sort':       'datedesc',
+    }
+    try:
+        r = requests.get(
+            GDELT_BASE_URL,
+            params=params,
+            timeout=8,
+            headers={'User-Agent': 'AsifahAnalytics/1.0 (+https://asifahanalytics.com)'},
+        )
+        if r.status_code == 429:
+            print(f'[Africa GDELT] 429 rate limit -- skipping: {query[:80]}')
+            _gdelt_failed_this_scan = True
+            return []
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        out = []
+        for a in data.get('articles', []) or []:
+            out.append({
+                'title':       a.get('title', ''),
+                'description': a.get('seendate', '') + ' -- ' + (a.get('domain') or ''),
+                'url':         a.get('url', ''),
+                'published':   a.get('seendate', ''),
+                'source':      a.get('domain', 'GDELT'),
+                'query':       query,
+                'language':    language,
+            })
+        return out
+    except Exception as e:
+        print(f'[Africa GDELT] {language} error: {str(e)[:80]}')
+        _gdelt_failed_this_scan = True
+        return []
+
+
+# ============================================================
+# NEWSAPI FETCH
+# ============================================================
+
+def fetch_newsapi(query, days=7):
+    """Fetch NewsAPI articles. Returns [] on missing key / error."""
+    if not NEWSAPI_KEY:
+        return []
+    from_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
+    try:
+        r = requests.get(
+            'https://newsapi.org/v2/everything',
+            params={
+                'q':        query,
+                'from':     from_date,
+                'sortBy':   'publishedAt',
+                'language': 'en',
+                'pageSize': '40',
+                'apiKey':   NEWSAPI_KEY,
+            },
+            timeout=8,
+        )
+        if r.status_code != 200:
+            print(f'[Africa NewsAPI] HTTP {r.status_code} on {query[:60]}')
+            return []
+        data = r.json()
+        out = []
+        for a in (data.get('articles') or []):
+            out.append({
+                'title':       a.get('title', '') or '',
+                'description': a.get('description', '') or '',
+                'url':         a.get('url', ''),
+                'published':   a.get('publishedAt', ''),
+                'source':      (a.get('source') or {}).get('name', 'NewsAPI'),
+                'query':       query,
+            })
+        return out
+    except Exception as e:
+        print(f'[Africa NewsAPI] error: {str(e)[:80]}')
+        return []
+
+
+# ============================================================
+# BRAVE SEARCH FALLBACK
+# ============================================================
+
+def fetch_brave_news(query, count=20, freshness='pw', search_lang='en', country='us'):
+    """Brave Search News API. Free tier: ~1 req/sec, 2000/month."""
+    if not BRAVE_API_KEY:
+        return []
+    try:
+        r = requests.get(
+            'https://api.search.brave.com/res/v1/news/search',
+            headers={
+                'Accept':                 'application/json',
+                'X-Subscription-Token':   BRAVE_API_KEY,
+                'User-Agent':             'AsifahAnalytics/1.0',
+            },
+            params={
+                'q':                query,
+                'count':            str(count),
+                'freshness':        freshness,
+                'search_lang':      search_lang,
+                'country':          country,
+            },
+            timeout=8,
+        )
+        if r.status_code != 200:
+            print(f'[Africa Brave] HTTP {r.status_code} on {query[:60]}')
+            return []
+        data = r.json()
+        out = []
+        for item in (data.get('results') or []):
+            out.append({
+                'title':       item.get('title', '') or '',
+                'description': item.get('description', '') or '',
+                'url':         item.get('url', ''),
+                'published':   item.get('age', ''),
+                'source':      (item.get('meta_url') or {}).get('hostname', 'Brave'),
+                'query':       query,
+            })
+        return out
+    except Exception as e:
+        print(f'[Africa Brave] error: {str(e)[:80]}')
+        return []
+
+
+# ============================================================
+# RSS FETCH
+# ============================================================
+
+def fetch_rss(feed_url, max_items=15):
+    """Fetch and parse an RSS feed."""
+    try:
+        import feedparser
+        feed = feedparser.parse(feed_url, request_headers={
+            'User-Agent': 'AsifahAnalytics/1.0 (+https://asifahanalytics.com)'
+        })
+        out = []
+        for entry in (feed.entries or [])[:max_items]:
+            out.append({
+                'title':       entry.get('title', ''),
+                'description': entry.get('summary', '') or entry.get('description', ''),
+                'url':         entry.get('link', ''),
+                'published':   entry.get('published', '') or entry.get('updated', ''),
+                'source':      feed_url,
+                'query':       'rss',
+            })
+        return out
+    except Exception as e:
+        print(f'[Africa RSS] {feed_url[:80]} error: {str(e)[:80]}')
+        return []
+
+
+# ============================================================
+# COUNTRY CONFIG (14 countries)
+# ============================================================
+# Schema mirrors WHA COUNTRY_CONFIG: name, flag, base_conflict_pct,
+# context, labels, gdelt_queries_en, gdelt_queries_fr/ar/sw (where
+# applicable), newsapi_queries, rss_feeds, keywords_escalation,
+# keywords_deescalation.
+#
+# Language strategy by region:
+#   Sahel (Mali, Niger, Burkina Faso):  English + French
+#   Sudan + South Sudan + Somalia:      English + Arabic
+#   DRC:                                 English + French
+#   Ethiopia + Kenya + Uganda + Tanzania + Rwanda: English + Swahili
+#   Nigeria:                             English only (Hausa low-coverage)
+#   South Africa:                        English only
+# ============================================================
+
+COUNTRY_CONFIG = {
+
+    # ────────────────────────────────────────────────────────────
+    'sudan': {
+        'name':              'Sudan',
+        'flag':              '\U0001f1f8\U0001f1e9',  # 🇸🇩
+        'base_conflict_pct': 88,
+        'context': ('Active war RSF v SAF since April 2023. IPC Phase 5 famine '
+                    'localized (El Fasher, Zamzam camp). UAE-backed RSF / '
+                    'Egypt-Russia-backed SAF axis. Mass displacement (~12M IDPs+refugees).'),
+        'labels': {
+            'low':    'War continuing (baseline awful)',
+            'medium': 'Tactical escalation',
+            'high':   'Strategic escalation',
+            'surge':  'Capital threat / mass-atrocity event',
+        },
+        'gdelt_queries_en': [
+            'sudan war RSF SAF', 'sudan famine IPC phase 5',
+            'el fasher siege RSF', 'sudan UAE Russia',
+            'sudan humanitarian access denied', 'sudan civilian casualties',
+            'sudan port sudan attack', 'sudan ceasefire jeddah',
+        ],
+        'gdelt_queries_ar': [
+            'السودان حرب الدعم السريع',
+            'السودان مجاعة الفاشر',
+        ],
+        'newsapi_queries': [
+            'Sudan RSF war famine',
+            'Sudan UAE Russia weapons',
+            'Sudan El Fasher siege',
+            'Sudan ceasefire negotiations',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=sudan+war+OR+RSF+OR+famine&hl=en&gl=US&ceid=US:en',
+            'https://news.google.com/rss/search?q=sudan+UAE+OR+egypt+OR+russia&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'el fasher falls', 'el fasher overrun', 'khartoum falls',
+            'mass atrocity', 'chemical weapons sudan', 'foreign troops sudan',
+            'darfur ethnic cleansing', 'genocide sudan', 'famine declared',
+            'port sudan attack', 'eritrea intervention',
+            'cross-border spillover', 'chad sudan refugees',
+        ],
+        'keywords_deescalation': [
+            'sudan ceasefire signed', 'sudan peace deal', 'humanitarian corridor opened',
+            'jeddah talks agreement', 'civilian government', 'aid delivered sudan',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'drc': {
+        'name':              'Democratic Republic of Congo',
+        'flag':              '\U0001f1e8\U0001f1e9',  # 🇨🇩
+        'base_conflict_pct': 65,
+        'context': ('Active Ebola Bundibugyo PHEIC since May 15 2026 (Ituri / '
+                    'Nord-Kivu / Sud-Kivu, ~750 suspected cases). M23 advance '
+                    'eastern provinces, Rwanda-backed. Cobalt convergence anchor.'),
+        'labels': {
+            'low':    'Routine eastern instability',
+            'medium': 'Ebola spread + M23 pressure',
+            'high':   'Ebola escalating + city threat',
+            'surge':  'Multi-vector crisis (Ebola + war + state collapse)',
+        },
+        'gdelt_queries_en': [
+            'DRC Ebola Ituri', 'DRC M23 advance',
+            'congo Goma kivu', 'DRC Rwanda border',
+            'DRC ebola contact tracing', 'DRC cobalt mining',
+            'DRC Wagner mercenary', 'congo MONUSCO withdrawal',
+        ],
+        'gdelt_queries_fr': [
+            'RDC Ebola Ituri Bundibugyo',
+            'RDC M23 Goma Kivu',
+            'RDC Rwanda frontière',
+        ],
+        'newsapi_queries': [
+            'DRC Ebola outbreak Bundibugyo',
+            'DRC M23 advance Goma',
+            'DRC Rwanda border tension',
+            'DRC cobalt mining Glencore',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=DRC+OR+Congo+OR+Kinshasa+Ebola+OR+M23&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'ebola spreads', 'ebola new province', 'ebola crosses border',
+            'M23 takes city', 'goma falls', 'bukavu falls',
+            'rwanda congo war', 'mass casualties drc',
+            'cobalt mine attack', 'cobalt supply disruption',
+        ],
+        'keywords_deescalation': [
+            'ebola contained', 'ebola last patient', 'M23 ceasefire',
+            'rwanda congo talks', 'DRC peace agreement',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'uganda': {
+        'name':              'Uganda',
+        'flag':              '\U0001f1fa\U0001f1ec',  # 🇺🇬
+        'base_conflict_pct': 30,
+        'context': ('Five Ebola cases confirmed in Kampala (May 15-23 2026), '
+                    'imported from DRC. Museveni succession pressure. ADF/IS '
+                    'central africa cross-border threat from DRC.'),
+        'labels': {
+            'low':    'Routine',
+            'medium': 'Ebola spread risk',
+            'high':   'Ebola escalating',
+            'surge':  'Outbreak + political crisis',
+        },
+        'gdelt_queries_en': [
+            'uganda ebola kampala', 'uganda border closure DRC',
+            'museveni uganda succession', 'uganda ADF islamic state',
+            'uganda EAC east african community',
+        ],
+        'gdelt_queries_sw': [
+            'Uganda Ebola Kampala',
+        ],
+        'newsapi_queries': [
+            'Uganda Ebola Kampala',
+            'Uganda Museveni succession',
+            'Uganda ADF terrorism',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=uganda+ebola+OR+museveni+OR+ADF&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'uganda ebola spread', 'kampala lockdown', 'uganda outbreak',
+            'museveni health', 'uganda coup',
+            'ADF attack', 'islamic state uganda',
+        ],
+        'keywords_deescalation': [
+            'uganda ebola contained', 'last ebola patient uganda',
+            'uganda elections peaceful',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'rwanda': {
+        'name':              'Rwanda',
+        'flag':              '\U0001f1f7\U0001f1fc',  # 🇷🇼
+        'base_conflict_pct': 28,
+        'context': ('Partial border closure with DRC over Ebola (May 2026). '
+                    'M23 backing pressure / sanctions risk. Kagame regime stable '
+                    'but increasingly isolated diplomatically.'),
+        'labels': {
+            'low':    'Routine',
+            'medium': 'Border tension',
+            'high':   'Sanctions / M23 escalation',
+            'surge':  'Open Rwanda-DRC conflict',
+        },
+        'gdelt_queries_en': [
+            'rwanda DRC border ebola', 'rwanda M23 backing sanctions',
+            'kagame rwanda diplomatic', 'rwanda EU minerals deal',
+        ],
+        'newsapi_queries': [
+            'Rwanda DRC border tension',
+            'Rwanda M23 sanctions',
+            'Rwanda Kagame',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=rwanda+OR+kigali+M23+OR+DRC+OR+ebola&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'rwanda sanctioned', 'rwanda eu sanctions', 'rwanda us sanctions',
+            'rwanda DRC war', 'kigali bombing', 'rwanda forces in DRC',
+        ],
+        'keywords_deescalation': [
+            'rwanda DRC talks', 'rwanda M23 withdrawal',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'south_sudan': {
+        'name':              'South Sudan',
+        'flag':              '\U0001f1f8\U0001f1f8',  # 🇸🇸
+        'base_conflict_pct': 68,
+        'context': ('Africa CDC priority Member State for Ebola response. '
+                    'Active 2026 peace process implementation. Heavy oil '
+                    'dependency; Sudan war disrupts pipeline. Sudan refugee corridor.'),
+        'labels': {
+            'low':    'Implementation lag baseline',
+            'medium': 'Peace stress',
+            'high':   'Process collapse risk',
+            'surge':  'Return to active conflict',
+        },
+        'gdelt_queries_en': [
+            'south sudan kiir machar', 'south sudan peace agreement implementation',
+            'south sudan ebola border DRC', 'south sudan oil pipeline sudan',
+            'south sudan refugees sudan',
+        ],
+        'newsapi_queries': [
+            'South Sudan Kiir Machar peace',
+            'South Sudan ebola border',
+            'South Sudan oil pipeline Sudan war',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=south+sudan+OR+juba+kiir+OR+machar&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'south sudan ceasefire collapse', 'kiir machar split',
+            'south sudan war returns', 'oil pipeline destroyed',
+            'south sudan ebola confirmed',
+        ],
+        'keywords_deescalation': [
+            'south sudan elections announced', 'kiir machar agreement',
+            'oil flow resumes south sudan',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'kenya': {
+        'name':              'Kenya',
+        'flag':              '\U0001f1f0\U0001f1ea',  # 🇰🇪
+        'base_conflict_pct': 22,
+        'context': ('Northern Corridor trade route exposure to Ebola. Heightened '
+                    'border screening. Haiti MSS deployment. Somalia border '
+                    'al-shabaab spillover. Ruto government economic pressure.'),
+        'labels': {
+            'low':    'Routine',
+            'medium': 'Ebola screening / al-shabaab tempo',
+            'high':   'Spillover / unrest',
+            'surge':  'Multi-front crisis',
+        },
+        'gdelt_queries_en': [
+            'kenya ebola screening', 'kenya somalia border al-shabaab',
+            'kenya haiti deployment MSS', 'kenya ruto protest',
+            'kenya economy shilling', 'kenya northern corridor truck',
+        ],
+        'gdelt_queries_sw': [
+            'Kenya Ebola mpaka',
+        ],
+        'newsapi_queries': [
+            'Kenya Ebola border screening',
+            'Kenya al-shabaab Somalia',
+            'Kenya Haiti deployment',
+            'Kenya Ruto protests',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=kenya+ebola+OR+shabaab+OR+ruto&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'kenya ebola case', 'al-shabaab attack kenya',
+            'kenya protest violence', 'haiti MSS withdrawn',
+        ],
+        'keywords_deescalation': [
+            'kenya economy stable', 'kenya shilling strengthens',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'tanzania': {
+        'name':              'Tanzania',
+        'flag':              '\U0001f1f9\U0001f1ff',  # 🇹🇿
+        'base_conflict_pct': 16,
+        'context': ('Heightened ebola screening from DRC/Uganda. Generally stable '
+                    'but ruling CCM dynamics opaque. Cabo Delgado (Mozambique) '
+                    'spillover risk on southern border.'),
+        'labels': {
+            'low':    'Routine',
+            'medium': 'Ebola screening',
+            'high':   'Imported case / political crisis',
+            'surge':  'Outbreak / mass unrest',
+        },
+        'gdelt_queries_en': [
+            'tanzania ebola screening DRC', 'tanzania CCM',
+            'tanzania cabo delgado spillover', 'tanzania samia',
+        ],
+        'gdelt_queries_sw': [
+            'Tanzania Ebola',
+        ],
+        'newsapi_queries': [
+            'Tanzania Ebola screening',
+            'Tanzania Samia Suluhu',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=tanzania+OR+dodoma+OR+dar+es+salaam&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'tanzania ebola case', 'tanzania protest', 'cabo delgado tanzania',
+        ],
+        'keywords_deescalation': [
+            'tanzania stable',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'ethiopia': {
+        'name':              'Ethiopia',
+        'flag':              '\U0001f1ea\U0001f1f9',  # 🇪🇹
+        'base_conflict_pct': 42,
+        'context': ('Tigray peace agreement implementation lag. Amhara Fano '
+                    'insurgency active. Eritrea tension (TPLF nexus). GERD final '
+                    'phase / Egypt-Sudan downstream dispute.'),
+        'labels': {
+            'low':    'Routine post-Tigray',
+            'medium': 'Amhara escalation / GERD friction',
+            'high':   'Multi-region insurgency / Eritrea war risk',
+            'surge':  'State collapse risk',
+        },
+        'gdelt_queries_en': [
+            'ethiopia amhara fano', 'ethiopia tigray TPLF',
+            'ethiopia eritrea border', 'ethiopia GERD egypt',
+            'ethiopia abiy ahmed', 'ethiopia somali region',
+        ],
+        'newsapi_queries': [
+            'Ethiopia Amhara Fano insurgency',
+            'Ethiopia Tigray TPLF',
+            'Ethiopia GERD Egypt Sudan',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=ethiopia+OR+addis+ababa+OR+abiy&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'eritrea war ethiopia', 'GERD egypt strike', 'ethiopia mass atrocity',
+            'tigray returns to war', 'amhara takes city',
+        ],
+        'keywords_deescalation': [
+            'ethiopia ceasefire', 'amhara talks', 'eritrea border de-escalation',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'somalia': {
+        'name':              'Somalia',
+        'flag':              '\U0001f1f8\U0001f1f4',  # 🇸🇴
+        'base_conflict_pct': 72,
+        'context': ('Al-Shabaab controls significant rural territory + occasional '
+                    'urban attacks. AMISOM successor (ATMIS / AUSSOM) transition. '
+                    'Somaliland independence push / Ethiopia MoU. Red Sea / Indian '
+                    'Ocean naval tempo.'),
+        'labels': {
+            'low':    'Baseline al-shabaab tempo',
+            'medium': 'Major urban attack',
+            'high':   'AUSSOM withdrawal / capital threat',
+            'surge':  'Mogadishu siege / state collapse',
+        },
+        'gdelt_queries_en': [
+            'somalia al-shabaab attack', 'somalia mogadishu',
+            'somalia AUSSOM ATMIS', 'somaliland ethiopia MoU',
+            'somalia us strike', 'somalia hassan sheikh',
+        ],
+        'gdelt_queries_ar': [
+            'الصومال الشباب مقديشو',
+        ],
+        'newsapi_queries': [
+            'Somalia al-Shabaab attack',
+            'Somalia AUSSOM withdrawal',
+            'Somaliland Ethiopia deal',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=somalia+OR+mogadishu+shabaab&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'mogadishu attack', 'al-shabaab takes town', 'AUSSOM withdraws',
+            'somaliland war ethiopia', 'somalia state collapse',
+        ],
+        'keywords_deescalation': [
+            'al-shabaab leader killed', 'somalia liberation operation',
+            'AUSSOM mandate extended',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'nigeria': {
+        'name':              'Nigeria',
+        'flag':              '\U0001f1f3\U0001f1ec',  # 🇳🇬
+        'base_conflict_pct': 45,
+        'context': ('Boko Haram + ISWAP in northeast. Bandits in northwest. '
+                    'Biafra agitation in southeast. Niger Delta oil theft and '
+                    'pipeline attacks. Naira currency crisis. Tinubu reform stress.'),
+        'labels': {
+            'low':    'Baseline multi-front insurgency',
+            'medium': 'Major attack / oil disruption',
+            'high':   'Currency / banking crisis',
+            'surge':  'State capital lost / coup',
+        },
+        'gdelt_queries_en': [
+            'nigeria boko haram ISWAP', 'nigeria bandits kidnapping',
+            'nigeria niger delta oil', 'nigeria naira tinubu',
+            'nigeria biafra IPOB', 'nigeria military coup',
+        ],
+        'newsapi_queries': [
+            'Nigeria Boko Haram ISWAP attack',
+            'Nigeria naira inflation Tinubu',
+            'Nigeria Niger Delta oil theft',
+            'Nigeria bandits kidnapping',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=nigeria+OR+abuja+OR+lagos+boko+OR+ISWAP+OR+naira&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'nigeria mass kidnapping', 'nigeria state capital attack',
+            'naira collapse', 'nigeria coup attempt',
+            'oil pipeline destroyed nigeria',
+        ],
+        'keywords_deescalation': [
+            'nigeria security improvement', 'naira stabilizes',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'mali': {
+        'name':              'Mali',
+        'flag':              '\U0001f1f2\U0001f1f1',  # 🇲🇱
+        'base_conflict_pct': 60,
+        'context': ('Junta government (Goïta). Wagner / Africa Corps deployment '
+                    'major presence. JNIM (al-Qaeda affiliate) controls significant '
+                    'rural territory. MINUSMA withdrawn 2023. Sahel Confederation '
+                    'with Niger + Burkina Faso.'),
+        'labels': {
+            'low':    'Baseline JNIM tempo',
+            'medium': 'Major attack / Wagner casualties',
+            'high':   'Junta crisis / capital threat',
+            'surge':  'JNIM takes Bamako vicinity / second coup',
+        },
+        'gdelt_queries_en': [
+            'mali junta goita', 'mali wagner africa corps',
+            'mali JNIM tuareg', 'mali sahel confederation',
+            'mali russia france', 'mali bamako attack',
+        ],
+        'gdelt_queries_fr': [
+            'Mali junte Goita',
+            'Mali Wagner Russie',
+            'Mali JNIM Touareg',
+        ],
+        'newsapi_queries': [
+            'Mali junta Wagner Russia',
+            'Mali JNIM attack',
+            'Mali Sahel Confederation',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=mali+OR+bamako+JNIM+OR+wagner+OR+junta&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'mali coup attempt', 'wagner casualties mali', 'bamako attack',
+            'JNIM takes town mali', 'tuareg uprising',
+        ],
+        'keywords_deescalation': [
+            'mali elections', 'mali wagner withdraw',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'niger': {
+        'name':              'Niger',
+        'flag':              '\U0001f1f3\U0001f1ea',  # 🇳🇪
+        'base_conflict_pct': 58,
+        'context': ('Tiani junta (July 2023 coup). French + US withdrawn; '
+                    'Russia Africa Corps deployed. Uranium exports to France/EU '
+                    'core stress point. Sahel Confederation member. JNIM/ISGS '
+                    'pressure in border zones.'),
+        'labels': {
+            'low':    'Baseline junta consolidation',
+            'medium': 'Major attack / sanctions tightening',
+            'high':   'Niamey siege / coup-on-coup',
+            'surge':  'State collapse / regional war',
+        },
+        'gdelt_queries_en': [
+            'niger junta tiani', 'niger uranium france EU',
+            'niger russia africa corps', 'niger ECOWAS sanctions',
+            'niger sahel confederation', 'niger niamey attack',
+        ],
+        'gdelt_queries_fr': [
+            'Niger junte Tiani uranium',
+            'Niger Russie sanctions',
+        ],
+        'newsapi_queries': [
+            'Niger junta uranium France',
+            'Niger Russia Africa Corps',
+            'Niger ECOWAS sanctions',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=niger+OR+niamey+uranium+OR+junta+OR+tiani&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'niger uranium cut', 'niger coup attempt', 'niamey attack',
+            'JNIM takes town niger',
+        ],
+        'keywords_deescalation': [
+            'niger ECOWAS deal', 'niger elections announced',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'burkina_faso': {
+        'name':              'Burkina Faso',
+        'flag':              '\U0001f1e7\U0001f1eb',  # 🇧🇫
+        'base_conflict_pct': 60,
+        'context': ('Traoré junta (Sept 2022 coup). Wagner / Africa Corps presence. '
+                    'JNIM controls ~40% of territory. Cotton + gold export pressure. '
+                    'Sahel Confederation member.'),
+        'labels': {
+            'low':    'Baseline junta consolidation',
+            'medium': 'Major attack / VDP casualties',
+            'high':   'Provincial capital threatened',
+            'surge':  'Ouagadougou under attack',
+        },
+        'gdelt_queries_en': [
+            'burkina faso traore junta', 'burkina faso wagner',
+            'burkina faso JNIM', 'burkina faso VDP volunteers',
+            'burkina faso gold cotton',
+        ],
+        'gdelt_queries_fr': [
+            'Burkina Faso Traoré junte',
+            'Burkina Faso Wagner JNIM',
+        ],
+        'newsapi_queries': [
+            'Burkina Faso Traore junta',
+            'Burkina Faso JNIM attack',
+            'Burkina Faso Wagner Russia',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=burkina+faso+OR+ouagadougou+traore+OR+JNIM&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'burkina coup attempt', 'ouagadougou attack',
+            'burkina JNIM takes town', 'traore deposed',
+        ],
+        'keywords_deescalation': [
+            'burkina elections', 'burkina security improvement',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'south_africa': {
+        'name':              'South Africa',
+        'flag':              '\U0001f1ff\U0001f1e6',  # 🇿🇦
+        'base_conflict_pct': 25,
+        'context': ('Diamond convergence anchor. BRICS+ founding member. ICJ '
+                    'genocide case against Israel posture. ANC-DA coalition '
+                    'stress. Eskom energy crisis. Mining-region violence '
+                    '(platinum, gold).'),
+        'labels': {
+            'low':    'Routine coalition stress',
+            'medium': 'Energy / mining shock',
+            'high':   'Coalition collapse / mass unrest',
+            'surge':  'July 2021-style insurrection',
+        },
+        'gdelt_queries_en': [
+            'south africa ANC DA coalition', 'south africa eskom load shedding',
+            'south africa ICJ israel', 'south africa BRICS+',
+            'south africa diamond mining', 'south africa ramaphosa',
+        ],
+        'newsapi_queries': [
+            'South Africa coalition ANC DA',
+            'South Africa Eskom power',
+            'South Africa ICJ Israel BRICS',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=south+africa+OR+pretoria+OR+johannesburg+ANC+OR+eskom&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'south africa unrest', 'south africa coalition collapse',
+            'eskom blackout extended', 'south africa mass violence',
+        ],
+        'keywords_deescalation': [
+            'south africa power restored', 'south africa coalition stable',
+        ],
+    },
+}
+
+
+# ============================================================
+# SCAN ENGINE
+# ============================================================
+
+def scan_country(country_id, days=7):
+    """
+    Run a full scan for a single country, hitting GDELT (en + native
+    language), NewsAPI, Brave fallback, and RSS feeds. Returns a
+    dict ready to cache.
+    """
+    config = COUNTRY_CONFIG.get(country_id)
+    if not config:
+        return None
+
+    print(f'[Africa Scan] Scanning {country_id} ({days}d)...')
+    scan_start = time.time()
+    all_articles = []
+
+    _reset_gdelt_circuit()
+
+    # ── GDELT English ──
+    gdelt_count = 0
+    for query in config.get('gdelt_queries_en', []):
+        articles = fetch_gdelt(query, days=days, language='eng')
+        all_articles.extend(articles)
+        gdelt_count += len(articles)
+        time.sleep(0.5)
+
+    # ── GDELT French (Sahel + DRC) ──
+    for query in config.get('gdelt_queries_fr', []):
+        articles = fetch_gdelt(query, days=days, language='fra')
+        all_articles.extend(articles)
+        gdelt_count += len(articles)
+        time.sleep(0.5)
+
+    # ── GDELT Arabic (Sudan / Somalia) ──
+    for query in config.get('gdelt_queries_ar', []):
+        articles = fetch_gdelt(query, days=days, language='ara')
+        all_articles.extend(articles)
+        gdelt_count += len(articles)
+        time.sleep(0.5)
+
+    # ── GDELT Swahili (East Africa) ──
+    for query in config.get('gdelt_queries_sw', []):
+        articles = fetch_gdelt(query, days=days, language='swa')
+        all_articles.extend(articles)
+        gdelt_count += len(articles)
+        time.sleep(0.5)
+
+    # ── NewsAPI ──
+    newsapi_count = 0
+    for query in config.get('newsapi_queries', []):
+        articles = fetch_newsapi(query, days=days)
+        all_articles.extend(articles)
+        newsapi_count += len(articles)
+        time.sleep(0.3)
+
+    # ── Brave fallback (only if GDELT + NewsAPI thin) ──
+    brave_count = 0
+    if (gdelt_count + newsapi_count) < 10 and BRAVE_API_KEY:
+        print(f'[Africa Scan] {country_id}: only {gdelt_count + newsapi_count} '
+              f'articles -- firing Brave fallback')
+        for query in config.get('newsapi_queries', [])[:2]:
+            articles = fetch_brave_news(query, count=20, freshness='pw',
+                                         search_lang='en', country='us')
+            all_articles.extend(articles)
+            brave_count += len(articles)
+            time.sleep(1.1)
+
+    # ── RSS ──
+    rss_count = 0
+    for feed_url in config.get('rss_feeds', []):
+        articles = fetch_rss(feed_url, max_items=15)
+        all_articles.extend(articles)
+        rss_count += len(articles)
+        time.sleep(0.3)
+
+    # ── Score escalation/de-escalation ──
+    esc_keywords = [k.lower() for k in config.get('keywords_escalation', [])]
+    de_keywords  = [k.lower() for k in config.get('keywords_deescalation', [])]
+    esc_hits = 0
+    de_hits = 0
+    for a in all_articles:
+        title = (a.get('title') or '').lower()
+        desc  = (a.get('description') or '').lower()
+        text = title + ' ' + desc
+        for k in esc_keywords:
+            if k in text:
+                esc_hits += 1
+                break
+        for k in de_keywords:
+            if k in text:
+                de_hits += 1
+                break
+
+    # ── Final score: base + escalation hits - de-escalation hits ──
+    base_pct = config.get('base_conflict_pct', 30)
+    score = base_pct + (esc_hits * 2) - (de_hits * 2)
+    score = max(0, min(100, score))
+
+    # ── Alert level ──
+    if score >= 75:
+        alert_level = 'surge'
+    elif score >= 55:
+        alert_level = 'high'
+    elif score >= 35:
+        alert_level = 'medium'
+    else:
+        alert_level = 'low'
+
+    elapsed = round(time.time() - scan_start, 1)
+
+    result = {
+        'country':                 country_id,
+        'country_name':            config['name'],
+        'country_flag':            config['flag'],
+        'conflict_probability':    score,
+        'alert_level':             alert_level,
+        'alert_label':             config.get('labels', {}).get(alert_level, alert_level),
+        'context':                 config.get('context', ''),
+        'total_articles':          len(all_articles),
+        'articles_by_source': {
+            'gdelt':   gdelt_count,
+            'newsapi': newsapi_count,
+            'brave':   brave_count,
+            'rss':     rss_count,
+        },
+        'escalation_hits':         esc_hits,
+        'deescalation_hits':       de_hits,
+        'top_articles':            all_articles[:30],   # cap to avoid bloat
+        'cached_at':               datetime.now(timezone.utc).isoformat(),
+        'scan_duration_sec':       elapsed,
+        'backend_version':         '1.0.0',
+        'cache_status':            'fresh',
+    }
+
+    cache_key = f'africa_country:{country_id}'
+    cache_set(cache_key, result)
+
+    print(f'[Africa Scan] {country_id} complete: score={score}, alert={alert_level}, '
+          f'articles={len(all_articles)}, elapsed={elapsed}s')
+    return result
+
+
+def _background_scan_country(country_id, days=7):
+    """Run a country scan in a background thread."""
+    try:
+        scan_country(country_id, days=days)
+    except Exception as e:
+        print(f'[Africa Background] {country_id} error: {str(e)[:200]}')
+
+
+def _run_all_countries_background(days=7):
+    """Periodic full-region refresh. Runs every CACHE_TTL_HOURS."""
+    while True:
+        try:
+            print('[Africa Background] Starting full-region refresh cycle...')
+            for country_id in COUNTRY_CONFIG.keys():
+                try:
+                    scan_country(country_id, days=days)
+                except Exception as e:
+                    print(f'[Africa Background] {country_id} scan failed: {str(e)[:200]}')
+                time.sleep(2)  # politeness between countries
+            print('[Africa Background] Full-region refresh complete; sleeping...')
+        except Exception as e:
+            print(f'[Africa Background] cycle error: {str(e)[:200]}')
+        time.sleep(CACHE_TTL_HOURS * 3600)
+
+
+def _start_background_refresh():
+    """Start the daemon refresh thread. Boot delay = 90s."""
+    def _delayed_start():
+        time.sleep(90)  # canonical 90s boot delay (per architecture)
+        _run_all_countries_background(days=7)
+
+    thread = threading.Thread(target=_delayed_start, daemon=True)
+    thread.start()
+    print('[Africa] Background refresh scheduled (90s delay → 12h cycle)')
+
+
+# ============================================================
+# ROUTES
+# ============================================================
+
+@app.route('/', methods=['GET'])
+def root():
+    return jsonify({
+        'service':       'asifah-africa-backend',
+        'version':       '1.0.0',
+        'theatre':       'Africa / AFRICOM',
+        'countries':     list(COUNTRY_CONFIG.keys()),
+        'country_count': len(COUNTRY_CONFIG),
+        'docs':          'https://asifahanalytics.com',
+        'not_for':       'operational use',
+    })
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({
+        'status':         'healthy',
+        'service':        'asifah-africa-backend',
+        'timestamp':      datetime.now(timezone.utc).isoformat(),
+        'cache':          'redis+file',
+        'modules': {
+            'telegram_africa':        TELEGRAM_AFRICA_AVAILABLE,
+            'bluesky_africa':         BLUESKY_AFRICA_AVAILABLE,
+            'commodity_proxy':        COMMODITY_PROXY_AVAILABLE,
+            'convergence_proxy':      CONVERGENCE_PROXY_AVAILABLE,
+            'sudan_rhetoric':         SUDAN_RHETORIC_AVAILABLE,
+            'africa_regional_bluf':   AFRICA_BLUF_AVAILABLE,
+        },
+    })
+
+
+@app.route('/debug/routes', methods=['GET'])
+def debug_routes():
+    """List all registered Flask routes — diagnostic helper."""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        routes.append({
+            'rule':    str(rule),
+            'methods': sorted(m for m in rule.methods if m not in ('HEAD', 'OPTIONS')),
+            'endpoint': rule.endpoint,
+        })
+    routes.sort(key=lambda r: r['rule'])
+    return jsonify({
+        'service':    'asifah-africa-backend',
+        'route_count': len(routes),
+        'routes':     routes,
+    })
+
+
+@app.route('/api/africa/threat/<country>', methods=['GET'])
+def api_africa_threat(country):
+    """Conflict probability + OSINT scan for a single country."""
+    country = country.lower()
+    if country not in COUNTRY_CONFIG:
+        return jsonify({
+            'error':              f'Country "{country}" not in Africa coverage',
+            'available_countries': list(COUNTRY_CONFIG.keys()),
+        }), 404
+
+    force = request.args.get('force', 'false').lower() == 'true'
+    cache_key = f'africa_country:{country}'
+
+    if not force:
+        cached = cache_get(cache_key)
+        if cached and is_cache_fresh(cached):
+            cached['cache_status'] = 'fresh'
+            return jsonify(cached)
+        if cached:
+            cached['cache_status'] = 'stale'
+            # Trigger background refresh; return stale immediately
+            threading.Thread(
+                target=_background_scan_country,
+                args=(country,),
+                daemon=True,
+            ).start()
+            return jsonify(cached)
+
+    # No cache OR force=true — synchronous scan
+    try:
+        result = scan_country(country, days=7)
+        if not result:
+            return jsonify({'error': 'Scan failed'}), 500
+        return jsonify(result)
+    except Exception as e:
+        print(f'[Africa Threat] {country} error: {str(e)[:200]}')
+        return jsonify({'error': str(e)[:200]}), 500
+
+
+@app.route('/api/africa/stability/<country>', methods=['GET'])
+def api_africa_stability(country):
+    """Lightweight stability card — for dashboard hub use."""
+    country = country.lower()
+    if country not in COUNTRY_CONFIG:
+        return jsonify({
+            'error':              f'Country "{country}" not in Africa coverage',
+            'available_countries': list(COUNTRY_CONFIG.keys()),
+        }), 404
+
+    cached = cache_get(f'africa_country:{country}')
+    config = COUNTRY_CONFIG[country]
+
+    # Always return a valid structure, even at cold start
+    return jsonify({
+        'country':              country,
+        'country_name':         config['name'],
+        'country_flag':         config['flag'],
+        'conflict_probability': (cached or {}).get('conflict_probability',
+                                                    config.get('base_conflict_pct', 30)),
+        'alert_level':          (cached or {}).get('alert_level', 'medium'),
+        'context':              config.get('context', ''),
+        'cached_at':            (cached or {}).get('cached_at'),
+        'cache_status':         'cached' if cached else 'cold',
+    })
+
+
+@app.route('/api/africa/scan-all', methods=['POST'])
+def api_scan_all():
+    """Trigger a full-region scan in the background."""
+    def _scan():
+        for country_id in COUNTRY_CONFIG.keys():
+            try:
+                scan_country(country_id, days=7)
+                time.sleep(2)
+            except Exception as e:
+                print(f'[Africa ScanAll] {country_id} error: {str(e)[:200]}')
+
+    threading.Thread(target=_scan, daemon=True).start()
+    return jsonify({
+        'status':    'background_scan_started',
+        'countries': list(COUNTRY_CONFIG.keys()),
+        'eta_sec':   len(COUNTRY_CONFIG) * 90,
+    })
+
+
+# ============================================================
+# REGISTER OPTIONAL MODULES
+# ============================================================
+
+if COMMODITY_PROXY_AVAILABLE:
+    try:
+        register_africa_commodity_proxy(app)
+        print('[Africa] ✅ Commodity proxy endpoints registered')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Commodity proxy registration failed: {e}')
+
+if CONVERGENCE_PROXY_AVAILABLE:
+    try:
+        register_africa_convergence_proxy(app)
+        print('[Africa] ✅ Convergence proxy endpoints registered')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Convergence proxy registration failed: {e}')
+
+if SUDAN_RHETORIC_AVAILABLE:
+    try:
+        register_sudan_rhetoric_endpoints(app)
+        start_sudan_rhetoric_refresh()
+        print('[Africa] ✅ Sudan rhetoric endpoints registered')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Sudan rhetoric registration failed: {e}')
+
+if AFRICA_BLUF_AVAILABLE:
+    try:
+        register_africa_bluf_routes(app)
+        print('[Africa] ✅ Africa regional BLUF endpoints registered')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Africa BLUF registration failed: {e}')
+
+
+# ============================================================
+# BOOT
+# ============================================================
+
+_start_background_refresh()
+
+print('=' * 60)
+print(f'  ASIFAH AFRICA BACKEND v1.0.0 -- BOOT COMPLETE')
+print(f'  Countries: {len(COUNTRY_CONFIG)} ({", ".join(COUNTRY_CONFIG.keys())})')
+print(f'  Redis:     {"✅ configured" if UPSTASH_REDIS_URL else "⚠️  not configured"}')
+print(f'  NewsAPI:   {"✅ configured" if NEWSAPI_KEY else "⚠️  not configured"}')
+print(f'  Brave:     {"✅ configured" if BRAVE_API_KEY else "⚠️  not configured"}')
+print(f'  Telegram:  {"✅ module loaded" if TELEGRAM_AFRICA_AVAILABLE else "⏳ pending"}')
+print(f'  Bluesky:   {"✅ module loaded" if BLUESKY_AFRICA_AVAILABLE else "⏳ pending"}')
+print(f'  Commodity: {"✅ proxy loaded" if COMMODITY_PROXY_AVAILABLE else "⏳ pending"}')
+print(f'  Sudan:     {"✅ tracker loaded" if SUDAN_RHETORIC_AVAILABLE else "⏳ pending"}')
+print(f'  BLUF:      {"✅ regional BLUF loaded" if AFRICA_BLUF_AVAILABLE else "⏳ pending"}')
+print('=' * 60)
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
