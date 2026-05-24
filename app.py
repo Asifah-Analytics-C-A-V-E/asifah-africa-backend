@@ -52,6 +52,7 @@ Not for operational use.
 # IMPORTS
 # ============================================================
 import os
+import re
 import json
 import time
 import threading
@@ -1285,8 +1286,14 @@ def api_africa_threat(country):
             return jsonify(cached)
 
     # No cache OR force=true — synchronous scan
+    # Honor optional ?days=N query param (default 7, clamped 1-30)
     try:
-        result = scan_country(country, days=7)
+        days = int(request.args.get('days', 7))
+        days = max(1, min(days, 30))
+    except (ValueError, TypeError):
+        days = 7
+    try:
+        result = scan_country(country, days=days)
         if not result:
             return jsonify({'error': 'Scan failed'}), 500
         return jsonify(result)
@@ -1341,13 +1348,13 @@ def api_scan_all():
     })
 
 # ============================================================
-# BEGIN PATCH — africa.html supporting endpoints (May 24 2026)
+# BEGIN PATCH v2 — africa.html supporting endpoints (May 24 2026)
+# Cloned from ME canonical patterns: cadataapi.state.gov + FAA NOTAM API
 # ============================================================
 
 # ─────────────────────────────────────────────────────────────
 # COUNTRIES INDEX
-# Returns the COUNTRY_CONFIG keys + display names for frontend
-# /api/africa/countries
+# /api/africa/countries — frontend roster + display names
 # ─────────────────────────────────────────────────────────────
 
 _COUNTRY_DISPLAY_NAMES = {
@@ -1373,8 +1380,8 @@ def api_africa_countries():
     result = []
     for cid in COUNTRY_CONFIG.keys():
         result.append({
-            'id':           cid,
-            'display_name': _COUNTRY_DISPLAY_NAMES.get(cid, cid.replace('_', ' ').title()),
+            'id':            cid,
+            'display_name':  _COUNTRY_DISPLAY_NAMES.get(cid, cid.replace('_', ' ').title()),
             'stability_url': f'{cid}-stability.html',
         })
     return jsonify({
@@ -1385,349 +1392,478 @@ def api_africa_countries():
 
 
 # ─────────────────────────────────────────────────────────────
-# TRAVEL ADVISORIES
-# Scrapes travel.state.gov per Africa country
+# TRAVEL ADVISORIES — Live State Dept API (ME canonical pattern)
 # /api/africa/travel-advisories
-# Returns: { success: True, advisories: { country: { level, level_color, link, level_short, recently_changed } } }
+# Source: https://cadataapi.state.gov/api/TravelAdvisories
 # ─────────────────────────────────────────────────────────────
 
-# State Dept advisory URL slugs for each Africa country
-_TRAVEL_ADVISORY_SLUGS = {
-    'burkina_faso': 'burkina-faso',
-    'drc':          'democratic-republic-of-the-congo',
-    'ethiopia':     'ethiopia',
-    'kenya':        'kenya',
-    'mali':         'mali',
-    'niger':        'niger',
-    'nigeria':      'nigeria',
-    'rwanda':       'rwanda',
-    'somalia':      'somalia',
-    'south_africa': 'south-africa',
-    'south_sudan':  'south-sudan',
-    'sudan':        'sudan',
-    'tanzania':     'tanzania',
-    'uganda':       'uganda',
+_africa_travel_advisory_cache = {'data': None, 'fetched_at': None, 'ttl': 86400}  # 24h
+AFRICA_TRAVEL_ADVISORY_API = "https://cadataapi.state.gov/api/TravelAdvisories"
+
+# State Dept uses FIPS country codes — these may NOT match ISO codes
+AFRICA_TRAVEL_ADVISORY_CODES = {
+    'burkina_faso': ['UV'],   # Burkina Faso (FIPS — UV)
+    'drc':          ['CG'],   # DRC (FIPS — Congo Kinshasa = CG)
+    'ethiopia':     ['ET'],   # Ethiopia
+    'kenya':        ['KE'],   # Kenya
+    'mali':         ['ML'],   # Mali
+    'niger':        ['NG'],   # Niger (FIPS — NG, confusingly!)
+    'nigeria':      ['NI'],   # Nigeria (FIPS — NI, also confusing)
+    'rwanda':       ['RW'],   # Rwanda
+    'somalia':      ['SO'],   # Somalia
+    'south_africa': ['SF'],   # South Africa (FIPS — SF not ZA!)
+    'south_sudan':  ['OD'],   # South Sudan (FIPS — OD)
+    'sudan':        ['SU'],   # Sudan (FIPS — SU)
+    'tanzania':     ['TZ'],   # Tanzania
+    'uganda':       ['UG'],   # Uganda
 }
 
-# Hardcoded fallback advisories (current State Dept levels as of May 2026)
-# These are used as a reliable default; the scraper can update them
-_TRAVEL_ADVISORY_FALLBACK = {
-    'burkina_faso': {'level': 4, 'level_short': 'Do Not Travel', 'level_color': '#7f1d1d'},
-    'drc':          {'level': 4, 'level_short': 'Do Not Travel', 'level_color': '#7f1d1d'},
-    'ethiopia':     {'level': 3, 'level_short': 'Reconsider Travel', 'level_color': '#ea580c'},
-    'kenya':        {'level': 2, 'level_short': 'Exercise Increased Caution', 'level_color': '#ca8a04'},
-    'mali':         {'level': 4, 'level_short': 'Do Not Travel', 'level_color': '#7f1d1d'},
-    'niger':        {'level': 4, 'level_short': 'Do Not Travel', 'level_color': '#7f1d1d'},
-    'nigeria':      {'level': 3, 'level_short': 'Reconsider Travel', 'level_color': '#ea580c'},
-    'rwanda':       {'level': 2, 'level_short': 'Exercise Increased Caution', 'level_color': '#ca8a04'},
-    'somalia':      {'level': 4, 'level_short': 'Do Not Travel', 'level_color': '#7f1d1d'},
-    'south_africa': {'level': 2, 'level_short': 'Exercise Increased Caution', 'level_color': '#ca8a04'},
-    'south_sudan':  {'level': 4, 'level_short': 'Do Not Travel', 'level_color': '#7f1d1d'},
-    'sudan':        {'level': 4, 'level_short': 'Do Not Travel', 'level_color': '#7f1d1d'},
-    'tanzania':     {'level': 2, 'level_short': 'Exercise Increased Caution', 'level_color': '#ca8a04'},
-    'uganda':       {'level': 3, 'level_short': 'Reconsider Travel', 'level_color': '#ea580c'},
+AFRICA_TRAVEL_ADVISORY_LEVELS = {
+    1: {'label': 'Exercise Normal Precautions', 'short': 'Normal Precautions', 'color': '#10b981'},
+    2: {'label': 'Exercise Increased Caution', 'short': 'Increased Caution', 'color': '#f59e0b'},
+    3: {'label': 'Reconsider Travel', 'short': 'Reconsider Travel', 'color': '#f97316'},
+    4: {'label': 'Do Not Travel', 'short': 'Do Not Travel', 'color': '#ef4444'},
 }
 
-_TRAVEL_ADVISORY_CACHE_KEY = 'africa:travel_advisories:v1'
-_TRAVEL_ADVISORY_CACHE_TTL = 24 * 3600  # 24 hours
+
+def _run_africa_travel_advisory_scan():
+    """Fetch U.S. State Dept travel advisories for Africa targets."""
+    try:
+        response = requests.get(AFRICA_TRAVEL_ADVISORY_API, timeout=15)
+        if response.status_code != 200:
+            print(f"[Africa Travel Advisory] API returned HTTP {response.status_code}")
+            return {'success': False, 'advisories': {}}
+
+        all_advisories = response.json()
+        results = {}
+
+        for target, codes in AFRICA_TRAVEL_ADVISORY_CODES.items():
+            for advisory in all_advisories:
+                category_list = advisory.get('Category', [])
+                if any(cat in codes for cat in category_list):
+                    category = category_list[0] if category_list else ''
+                    title = advisory.get('Title', '')
+                    level_match = re.search(r'Level\s+(\d)', title)
+                    level = int(level_match.group(1)) if level_match else 0
+                    level_info = AFRICA_TRAVEL_ADVISORY_LEVELS.get(level, {})
+
+                    summary_html = advisory.get('Summary', '')
+                    first_p = re.search(r'<p[^>]*>(.*?)</p>', summary_html, re.DOTALL | re.IGNORECASE)
+                    short_summary = ''
+                    if first_p:
+                        short_summary = re.sub(r'<[^>]+>', '', first_p.group(1)).strip()[:300]
+                    if not short_summary:
+                        short_summary = re.sub(r'<[^>]+>', '', summary_html).strip()[:300]
+
+                    published = advisory.get('Published', '')
+                    updated = advisory.get('Updated', '')
+                    link = advisory.get('Link', '')
+
+                    recently_changed = False
+                    change_description = ''
+                    try:
+                        updated_dt = datetime.fromisoformat(updated)
+                        if updated_dt.tzinfo is None:
+                            updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+                        days_since = (datetime.now(timezone.utc) - updated_dt).days
+                        if days_since <= 30:
+                            recently_changed = True
+                            summary_lower = summary_html.lower()
+                            if 'advisory level was increased' in summary_lower or 'upgraded' in summary_lower:
+                                change_description = f'Advisory level INCREASED (updated {days_since} days ago)'
+                            elif 'advisory level was decreased' in summary_lower or 'downgraded' in summary_lower:
+                                change_description = f'Advisory level DECREASED (updated {days_since} days ago)'
+                            else:
+                                change_description = f'Updated {days_since} days ago'
+                    except Exception:
+                        pass
+
+                    results[target] = {
+                        'country_code':       category,
+                        'title':              title,
+                        'level':              level,
+                        'level_label':        level_info.get('label', 'Unknown'),
+                        'level_short':        level_info.get('short', 'Unknown'),
+                        'level_color':        level_info.get('color', '#6b7280'),
+                        'short_summary':      short_summary,
+                        'link':               link,
+                        'published':          published,
+                        'updated':            updated,
+                        'recently_changed':   recently_changed,
+                        'change_description': change_description,
+                    }
+                    break  # found advisory for this target, move to next
+
+        return {'success': True, 'advisories': results}
+
+    except Exception as e:
+        print(f"[Africa Travel Advisory] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'advisories': {}}
+
 
 @app.route('/api/africa/travel-advisories', methods=['GET'])
 def api_africa_travel_advisories():
-    """Return State Dept travel advisories for all Africa countries."""
-    # Try cache first
-    cached = cache_get(_TRAVEL_ADVISORY_CACHE_KEY)
-    if cached and is_cache_fresh(cached, max_hours=24):
-        return jsonify(cached.get('data', {'success': False}))
+    """Return U.S. State Dept travel advisories for Africa targets. Cached 24h."""
+    try:
+        force = request.args.get('force', 'false').lower() == 'true'
+        now = time.time()
 
-    advisories = {}
-    for country_id, slug in _TRAVEL_ADVISORY_SLUGS.items():
-        fallback = _TRAVEL_ADVISORY_FALLBACK.get(country_id, {'level': 0, 'level_short': 'Unknown', 'level_color': '#6b7280'})
-        link = f'https://travel.state.gov/content/travel/en/traveladvisories/traveladvisories/{slug}-travel-advisory.html'
-        advisories[country_id] = {
-            'level':              fallback['level'],
-            'level_short':        fallback['level_short'],
-            'level_color':        fallback['level_color'],
-            'link':               link,
-            'recently_changed':   False,
-            'source':             'state.gov',
-            'data_as_of':         '2026-05-24',
-        }
+        if (not force
+                and _africa_travel_advisory_cache['data'] is not None
+                and _africa_travel_advisory_cache['fetched_at'] is not None
+                and (now - _africa_travel_advisory_cache['fetched_at']) < _africa_travel_advisory_cache['ttl']):
+            cached = _africa_travel_advisory_cache['data'].copy()
+            cached['cached'] = True
+            return jsonify(cached)
 
-    result = {
-        'success':    True,
-        'count':      len(advisories),
-        'advisories': advisories,
-        'last_updated': datetime.utcnow().isoformat() + 'Z',
-    }
+        data = _run_africa_travel_advisory_scan()
+        data['timestamp'] = datetime.now(timezone.utc).isoformat()
+        data['cached'] = False
 
-    # Cache for 24h
-    cache_set(_TRAVEL_ADVISORY_CACHE_KEY, {
-        'data':       result,
-        'cached_at':  datetime.utcnow().isoformat() + 'Z',
-    })
-    return jsonify(result)
+        _africa_travel_advisory_cache['data'] = data
+        _africa_travel_advisory_cache['fetched_at'] = now
+
+        return jsonify(data)
+    except Exception as e:
+        print(f"[Africa Travel Advisory] Endpoint error: {e}")
+        if _africa_travel_advisory_cache['data'] is not None:
+            stale = _africa_travel_advisory_cache['data'].copy()
+            stale['cached'] = True
+            stale['stale'] = True
+            return jsonify(stale)
+        return jsonify({'success': False, 'error': str(e), 'advisories': {}}), 500
 
 
 # ─────────────────────────────────────────────────────────────
-# NOTAMs
-# Scrapes FAA NOTAMs for African FIRs
+# NOTAMs — Live FAA API (ME canonical pattern)
 # /api/africa/notams
-# Returns: { notams: [ { country, flag, classification, summary, fir, effective, source_url } ] }
+# Source: https://external-api.faa.gov/notamapi/v1/notams
 # ─────────────────────────────────────────────────────────────
 
-_NOTAM_CACHE_KEY = 'africa:notams:v1'
-_NOTAM_CACHE_TTL = 6 * 3600  # 6 hours
+# African FIR ICAO codes — covers all 14 target countries + key neighbors
+AFRICA_FIRS = {
+    'DFFF': {'country': 'Burkina Faso',  'flag': '🇧🇫', 'name': 'Ouagadougou FIR'},
+    'FZZA': {'country': 'DRC',            'flag': '🇨🇩', 'name': 'Kinshasa FIR'},
+    'HAAA': {'country': 'Ethiopia',       'flag': '🇪🇹', 'name': 'Addis Ababa FIR'},
+    'HKNA': {'country': 'Kenya',          'flag': '🇰🇪', 'name': 'Nairobi FIR'},
+    'GABS': {'country': 'Mali',           'flag': '🇲🇱', 'name': 'Bamako FIR'},
+    'DRRR': {'country': 'Niger',          'flag': '🇳🇪', 'name': 'Niamey FIR'},
+    'DNKK': {'country': 'Nigeria',        'flag': '🇳🇬', 'name': 'Kano FIR'},
+    'DNAA': {'country': 'Nigeria',        'flag': '🇳🇬', 'name': 'Abuja FIR'},
+    'HRYR': {'country': 'Rwanda',         'flag': '🇷🇼', 'name': 'Kigali FIR'},
+    'HCMM': {'country': 'Somalia',        'flag': '🇸🇴', 'name': 'Mogadishu FIR'},
+    'FAJS': {'country': 'South Africa',   'flag': '🇿🇦', 'name': 'Johannesburg FIR'},
+    'HJJJ': {'country': 'South Sudan',    'flag': '🇸🇸', 'name': 'Juba FIR'},
+    'HSSS': {'country': 'Sudan',          'flag': '🇸🇩', 'name': 'Khartoum FIR'},
+    'HUEN': {'country': 'Uganda',         'flag': '🇺🇬', 'name': 'Entebbe FIR'},
+    # Neighboring FIRs (high-context spillover)
+    'HLLL': {'country': 'Libya',          'flag': '🇱🇾', 'name': 'Tripoli FIR'},
+    'GMMM': {'country': 'Morocco',        'flag': '🇲🇦', 'name': 'Casablanca FIR'},
+    'HECC': {'country': 'Egypt',          'flag': '🇪🇬', 'name': 'Cairo FIR'},
+}
 
-# Static curated NOTAMs for Africa airspace (May 2026 baseline)
-# These are real situational awareness items — will be replaced with live FAA scraper Round 4+
-_AFRICA_NOTAM_BASELINE = [
-    {
-        'country':        'Sudan',
-        'flag':           '🇸🇩',
-        'fir':            'HSSS',
-        'classification': 'CONFLICT',
-        'type':           'CONFLICT',
-        'summary':        'Sudanese airspace effectively closed since April 2023 conflict. KRT (Khartoum) airport non-operational. Multiple SAF/RSF air defense engagements reported.',
-        'effective':      '2023-04-15',
-        'source_url':     'https://www.faa.gov/air_traffic/publications/us_restrictions/',
-        'data_as_of':     '2026-05-24',
-    },
-    {
-        'country':        'Mali',
-        'flag':           '🇲🇱',
-        'fir':            'GAAA',
-        'classification': 'MILITARY',
-        'type':           'MILITARY',
-        'summary':        'Sahel airspace operationally degraded. Active Wagner/Africa Corps operations. Caution advised below FL280 in northern Mali.',
-        'effective':      'Ongoing',
-        'source_url':     'https://www.faa.gov/air_traffic/publications/us_restrictions/',
-        'data_as_of':     '2026-05-24',
-    },
-    {
-        'country':        'Libya',
-        'flag':           '🇱🇾',
-        'fir':            'HLLL',
-        'classification': 'CONFLICT',
-        'type':           'CONFLICT',
-        'summary':        'Tripoli FIR operations reduced. GNU/LNA contested airspace. FAA SFAR 110 restricts U.S. operators.',
-        'effective':      'Ongoing',
-        'source_url':     'https://www.faa.gov/air_traffic/publications/us_restrictions/',
-        'data_as_of':     '2026-05-24',
-    },
-    {
-        'country':        'Somalia',
-        'flag':           '🇸🇴',
-        'fir':            'HCSM',
-        'classification': 'RESTRICTED',
-        'type':           'RESTRICTED',
-        'summary':        'Mogadishu FIR partially uncontrolled. Al-Shabaab anti-aircraft capabilities reported in southern regions. Caution below FL260.',
-        'effective':      'Ongoing',
-        'source_url':     'https://www.faa.gov/air_traffic/publications/us_restrictions/',
-        'data_as_of':     '2026-05-24',
-    },
-    {
-        'country':        'Ethiopia',
-        'flag':           '🇪🇹',
-        'fir':            'HAAA',
-        'classification': 'MILITARY',
-        'type':           'MILITARY',
-        'summary':        'Amhara region — periodic ENDF operations. Tigray transition continues. Bole (ADD) operating normally; regional airports variable.',
-        'effective':      'Ongoing',
-        'source_url':     'https://www.faa.gov/air_traffic/publications/us_restrictions/',
-        'data_as_of':     '2026-05-24',
-    },
-    {
-        'country':        'DRC',
-        'flag':           '🇨🇩',
-        'fir':            'FZZA',
-        'classification': 'CONFLICT',
-        'type':           'CONFLICT',
-        'summary':        'Eastern DRC (Goma/Bukavu) M23 advance. Active anti-aircraft engagements. WHO Ebola PHEIC quarantine zones — verify destination operational status.',
-        'effective':      '2026-05-15',
-        'source_url':     'https://www.faa.gov/air_traffic/publications/us_restrictions/',
-        'data_as_of':     '2026-05-24',
-    },
-    {
-        'country':        'Burkina Faso',
-        'flag':           '🇧🇫',
-        'fir':            'DXXX',
-        'classification': 'MILITARY',
-        'type':           'MILITARY',
-        'summary':        'JNIM-controlled zones limit cross-country VFR. Ouagadougou (OUA) operational. Caution near northern/eastern borders.',
-        'effective':      'Ongoing',
-        'source_url':     'https://www.faa.gov/air_traffic/publications/us_restrictions/',
-        'data_as_of':     '2026-05-24',
-    },
-    {
-        'country':        'Niger',
-        'flag':           '🇳🇪',
-        'fir':            'DRRR',
-        'classification': 'MILITARY',
-        'type':           'MILITARY',
-        'summary':        'Air Base 201 (Agadez) status changed post-US withdrawal. Russian Africa Corps presence in Niamey. Verify operational permissions.',
-        'effective':      '2024-09-15',
-        'source_url':     'https://www.faa.gov/air_traffic/publications/us_restrictions/',
-        'data_as_of':     '2026-05-24',
-    },
-]
+_africa_notam_cache = {'data': None, 'fetched_at': None, 'ttl': 6 * 3600}  # 6h
+
+
+def _parse_africa_notam(notam_data, location_info):
+    """Parse a single FAA NOTAM into structured format."""
+    try:
+        notam_text = notam_data.get('notamText', '').upper()
+
+        notam_type = 'OTHER'
+        icon = '📋'
+        color = 'gray'
+
+        if any(word in notam_text for word in ['AIRSPACE CLOSED', 'AIRSPACE CLO', 'FIR CLOSED']):
+            notam_type = 'AIRSPACE CLOSURE'
+            icon = '⛔'
+            color = 'red'
+        elif any(word in notam_text for word in ['RESTRICTED', 'PROHIBITED', 'DANGER AREA']):
+            notam_type = 'FLIGHT RESTRICTION'
+            icon = '🚫'
+            color = 'orange'
+        elif any(word in notam_text for word in ['MILITARY', 'MIL ACT', 'EXERCISE']):
+            notam_type = 'MILITARY ACTIVITY'
+            icon = '⚠️'
+            color = 'yellow'
+        elif any(word in notam_text for word in ['AIRPORT CLOSED', 'AD CLOSED', 'RWY CLOSED']):
+            notam_type = 'AIRPORT CLOSURE'
+            icon = '🛑'
+            color = 'purple'
+        elif any(word in notam_text for word in ['NAVAID', 'VOR', 'DME', 'ILS', 'U/S']):
+            notam_type = 'NAVAID OUTAGE'
+            icon = '📡'
+            color = 'blue'
+        elif any(word in notam_text for word in ['VOLCANIC', 'ASH', 'HAZARD', 'OBSTRUCTION']):
+            notam_type = 'HAZARD'
+            icon = '⚠️'
+            color = 'gray'
+
+        effective_date = notam_data.get('effectiveStart', '')
+        expiry_date = notam_data.get('effectiveEnd', '')
+
+        effective_formatted = ''
+        expiry_formatted = ''
+
+        if effective_date:
+            try:
+                eff_dt = datetime.fromisoformat(effective_date.replace('Z', '+00:00'))
+                effective_formatted = eff_dt.strftime('%b %d, %Y')
+            except Exception:
+                effective_formatted = effective_date[:10]
+
+        if expiry_date:
+            try:
+                exp_dt = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
+                expiry_formatted = exp_dt.strftime('%b %d, %Y')
+            except Exception:
+                expiry_formatted = expiry_date[:10]
+
+        summary = notam_text[:150].strip()
+        if len(notam_text) > 150:
+            summary += '...'
+
+        notam_id = notam_data.get('notamID', 'N/A')
+
+        return {
+            'id':              notam_id,
+            'country':         location_info['country'],
+            'flag':            location_info['flag'],
+            'fir':             location_info['name'],
+            'type':            notam_type,
+            'classification':  notam_type,
+            'icon':            icon,
+            'color':           color,
+            'summary':         summary,
+            'effective_date':  effective_formatted,
+            'expiry_date':     expiry_formatted,
+            'effective':       effective_formatted or 'Immediately',
+            'valid_range':     f"{effective_formatted} - {expiry_formatted}" if expiry_formatted else f"From {effective_formatted}",
+            'notam_text':      notam_text,
+            'source_url':      f"https://notams.aim.faa.gov/notamSearch/notam.html?id={notam_id}",
+        }
+    except Exception as e:
+        print(f"[Africa NOTAM] parse error: {e}")
+        return None
+
 
 @app.route('/api/africa/notams', methods=['GET'])
 def api_africa_notams():
-    """Return active NOTAMs for African airspace."""
-    cached = cache_get(_NOTAM_CACHE_KEY)
-    if cached and is_cache_fresh(cached, max_hours=6):
-        return jsonify(cached.get('data', {'notams': []}))
+    """Fetch active NOTAMs for African airspace (live FAA API)."""
+    try:
+        force = request.args.get('force', 'false').lower() == 'true'
+        now = time.time()
 
-    result = {
-        'success':      True,
-        'count':        len(_AFRICA_NOTAM_BASELINE),
-        'notams':       _AFRICA_NOTAM_BASELINE,
-        'last_updated': datetime.utcnow().isoformat() + 'Z',
-        'source':       'curated baseline + planned FAA scraper',
-    }
+        if (not force
+                and _africa_notam_cache['data'] is not None
+                and _africa_notam_cache['fetched_at'] is not None
+                and (now - _africa_notam_cache['fetched_at']) < _africa_notam_cache['ttl']):
+            cached = _africa_notam_cache['data'].copy()
+            cached['cached'] = True
+            return jsonify(cached)
 
-    cache_set(_NOTAM_CACHE_KEY, {
-        'data':       result,
-        'cached_at':  datetime.utcnow().isoformat() + 'Z',
-    })
-    return jsonify(result)
+        notams = []
+        base_url = "https://external-api.faa.gov/notamapi/v1/notams"
+
+        for icao_code, info in AFRICA_FIRS.items():
+            try:
+                params = {
+                    'locationICAOId': icao_code,
+                    'responseType':   'application/json',
+                }
+                response = requests.get(base_url, params=params, timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('notamList'):
+                        for notam in data['notamList']:
+                            parsed = _parse_africa_notam(notam, info)
+                            if parsed:
+                                notams.append(parsed)
+                time.sleep(0.2)  # rate limit politeness
+            except Exception as e:
+                print(f"[Africa NOTAM] {icao_code} fetch error: {e}")
+                continue
+
+        priority_order = {
+            'AIRSPACE CLOSURE':   1,
+            'FLIGHT RESTRICTION': 2,
+            'MILITARY ACTIVITY':  3,
+            'AIRPORT CLOSURE':    4,
+            'NAVAID OUTAGE':      5,
+            'HAZARD':             6,
+            'OTHER':              7,
+        }
+        notams.sort(key=lambda x: (priority_order.get(x['type'], 99), x.get('effective_date', '')))
+
+        result = {
+            'success':      True,
+            'notams':       notams,
+            'count':        len(notams),
+            'last_updated': datetime.now(timezone.utc).isoformat(),
+            'cached':       False,
+        }
+
+        _africa_notam_cache['data']       = result
+        _africa_notam_cache['fetched_at'] = now
+
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"[Africa NOTAM] Endpoint error: {e}")
+        if _africa_notam_cache['data'] is not None:
+            stale = _africa_notam_cache['data'].copy()
+            stale['cached'] = True
+            stale['stale'] = True
+            return jsonify(stale)
+        return jsonify({'success': False, 'notams': [], 'count': 0, 'error': str(e)}), 500
 
 
 # ─────────────────────────────────────────────────────────────
-# FLIGHT DISRUPTIONS
-# Aggregates airline cancellations / route suspensions for Africa
+# FLIGHT DISRUPTIONS — curated baseline (no live API exists yet)
 # /api/africa/flights
-# Returns: { disruptions: [ { airline, route, status, headline, date, reason, source_url } ] }
+# Round 4+ will replace with live aggregator
 # ─────────────────────────────────────────────────────────────
 
-_FLIGHTS_CACHE_KEY = 'africa:flights:v1'
-_FLIGHTS_CACHE_TTL = 12 * 3600  # 12 hours
+_africa_flights_cache = {'data': None, 'fetched_at': None, 'ttl': 12 * 3600}  # 12h
 
-# Curated flight disruption baseline for May 2026
-# Will be replaced with live aggregator (Reuters/airline announcements) Round 4+
 _AFRICA_FLIGHT_BASELINE = [
     {
-        'airline':    'Lufthansa',
-        'route':      'Frankfurt — Khartoum (KRT)',
+        'airline':     'Lufthansa',
+        'route':       'Frankfurt — Khartoum (KRT)',
         'destination': 'Khartoum',
-        'status':     'Suspended',
-        'headline':   'Khartoum service suspended indefinitely since April 2023 conflict.',
-        'date':       '2023-04-15',
-        'duration':   'Indefinite',
-        'reason':     'Active conflict / airport non-operational',
-        'source_url': 'https://www.lufthansa.com/',
-        'data_as_of': '2026-05-24',
+        'status':      'Suspended',
+        'headline':    'Khartoum service suspended indefinitely since April 2023 conflict.',
+        'date':        '2023-04-15',
+        'duration':    'Indefinite',
+        'reason':      'Active conflict / airport non-operational',
+        'source_url':  'https://www.lufthansa.com/',
+        'data_as_of':  '2026-05-24',
     },
     {
-        'airline':    'Air France',
-        'route':      'Paris — Bamako (BKO)',
+        'airline':     'Air France',
+        'route':       'Paris — Bamako (BKO)',
         'destination': 'Bamako',
-        'status':     'Suspended',
-        'headline':   'Air France Bamako service suspended; codeshare reroute via Air Algérie not currently active.',
-        'date':       '2024-01-10',
-        'duration':   'Indefinite',
-        'reason':     'Political tensions / security situation',
-        'source_url': 'https://www.airfrance.fr/',
-        'data_as_of': '2026-05-24',
+        'status':      'Suspended',
+        'headline':    'Air France Bamako service suspended; codeshare reroute via Air Algérie not currently active.',
+        'date':        '2024-01-10',
+        'duration':    'Indefinite',
+        'reason':      'Political tensions / security situation',
+        'source_url':  'https://www.airfrance.fr/',
+        'data_as_of':  '2026-05-24',
     },
     {
-        'airline':    'Air France',
-        'route':      'Paris — Niamey (NIM)',
+        'airline':     'Air France',
+        'route':       'Paris — Niamey (NIM)',
         'destination': 'Niamey',
-        'status':     'Suspended',
-        'headline':   'Air France Niamey service suspended since 2023 coup.',
-        'date':       '2023-08-01',
-        'duration':   'Indefinite',
-        'reason':     'Diplomatic situation post-coup',
-        'source_url': 'https://www.airfrance.fr/',
-        'data_as_of': '2026-05-24',
+        'status':      'Suspended',
+        'headline':    'Air France Niamey service suspended since 2023 coup.',
+        'date':        '2023-08-01',
+        'duration':    'Indefinite',
+        'reason':      'Diplomatic situation post-coup',
+        'source_url':  'https://www.airfrance.fr/',
+        'data_as_of':  '2026-05-24',
     },
     {
-        'airline':    'Brussels Airlines',
-        'route':      'Brussels — Kinshasa (FIH)',
+        'airline':     'Brussels Airlines',
+        'route':       'Brussels — Kinshasa (FIH)',
         'destination': 'Kinshasa',
-        'status':     'Disrupted',
-        'headline':   'Kinshasa service operating with enhanced screening; Goma operations suspended.',
-        'date':       '2026-05-15',
-        'duration':   'Ongoing',
-        'reason':     'Ebola Bundibugyo PHEIC — health screening',
-        'source_url': 'https://www.brusselsairlines.com/',
-        'data_as_of': '2026-05-24',
+        'status':      'Disrupted',
+        'headline':    'Kinshasa service operating with enhanced screening; Goma operations suspended.',
+        'date':        '2026-05-15',
+        'duration':    'Ongoing',
+        'reason':      'Ebola Bundibugyo PHEIC — health screening',
+        'source_url':  'https://www.brusselsairlines.com/',
+        'data_as_of':  '2026-05-24',
     },
     {
-        'airline':    'Kenya Airways',
-        'route':      'Nairobi — Goma (GOM)',
+        'airline':     'Kenya Airways',
+        'route':       'Nairobi — Goma (GOM)',
         'destination': 'Goma',
-        'status':     'Suspended',
-        'headline':   'Goma service suspended due to Ebola quarantine zone + M23 security situation.',
-        'date':       '2026-05-15',
-        'duration':   'Indefinite',
-        'reason':     'Ebola PHEIC + conflict',
-        'source_url': 'https://www.kenya-airways.com/',
-        'data_as_of': '2026-05-24',
+        'status':      'Suspended',
+        'headline':    'Goma service suspended due to Ebola quarantine zone + M23 security situation.',
+        'date':        '2026-05-15',
+        'duration':    'Indefinite',
+        'reason':      'Ebola PHEIC + conflict',
+        'source_url':  'https://www.kenya-airways.com/',
+        'data_as_of':  '2026-05-24',
     },
     {
-        'airline':    'RwandAir',
-        'route':      'Kigali — Goma (GOM)',
+        'airline':     'RwandAir',
+        'route':       'Kigali — Goma (GOM)',
         'destination': 'Goma',
-        'status':     'Suspended',
-        'headline':   'Kigali-Goma service suspended; DRC-Rwanda border partial closure.',
-        'date':       '2026-05-18',
-        'duration':   'Indefinite',
-        'reason':     'Ebola PHEIC + diplomatic tensions',
-        'source_url': 'https://www.rwandair.com/',
-        'data_as_of': '2026-05-24',
+        'status':      'Suspended',
+        'headline':    'Kigali-Goma service suspended; DRC-Rwanda border partial closure.',
+        'date':        '2026-05-18',
+        'duration':    'Indefinite',
+        'reason':      'Ebola PHEIC + diplomatic tensions',
+        'source_url':  'https://www.rwandair.com/',
+        'data_as_of':  '2026-05-24',
     },
     {
-        'airline':    'Ethiopian Airlines',
-        'route':      'Addis Ababa — Mogadishu (MGQ)',
+        'airline':     'Ethiopian Airlines',
+        'route':       'Addis Ababa — Mogadishu (MGQ)',
         'destination': 'Mogadishu',
-        'status':     'Disrupted',
-        'headline':   'Mogadishu operations continue with enhanced security; periodic schedule changes.',
-        'date':       '2026-05-01',
-        'duration':   'Ongoing',
-        'reason':     'Al-Shabaab security situation',
-        'source_url': 'https://www.ethiopianairlines.com/',
-        'data_as_of': '2026-05-24',
+        'status':      'Disrupted',
+        'headline':    'Mogadishu operations continue with enhanced security; periodic schedule changes.',
+        'date':        '2026-05-01',
+        'duration':    'Ongoing',
+        'reason':      'Al-Shabaab security situation',
+        'source_url':  'https://www.ethiopianairlines.com/',
+        'data_as_of':  '2026-05-24',
     },
     {
-        'airline':    'EgyptAir',
-        'route':      'Cairo — Khartoum (KRT)',
+        'airline':     'EgyptAir',
+        'route':       'Cairo — Khartoum (KRT)',
         'destination': 'Khartoum',
-        'status':     'Suspended',
-        'headline':   'EgyptAir Khartoum service remains suspended; humanitarian charter ops only.',
-        'date':       '2023-04-15',
-        'duration':   'Indefinite',
-        'reason':     'Sudan conflict',
-        'source_url': 'https://www.egyptair.com/',
-        'data_as_of': '2026-05-24',
+        'status':      'Suspended',
+        'headline':    'EgyptAir Khartoum service remains suspended; humanitarian charter ops only.',
+        'date':        '2023-04-15',
+        'duration':    'Indefinite',
+        'reason':      'Sudan conflict',
+        'source_url':  'https://www.egyptair.com/',
+        'data_as_of':  '2026-05-24',
     },
 ]
 
+
 @app.route('/api/africa/flights', methods=['GET'])
 def api_africa_flights():
-    """Return active flight disruptions for Africa."""
-    cached = cache_get(_FLIGHTS_CACHE_KEY)
-    if cached and is_cache_fresh(cached, max_hours=12):
-        return jsonify(cached.get('data', {'disruptions': []}))
+    """Return active flight disruptions for Africa (curated baseline)."""
+    try:
+        force = request.args.get('force', 'false').lower() == 'true'
+        now = time.time()
 
-    result = {
-        'success':      True,
-        'count':        len(_AFRICA_FLIGHT_BASELINE),
-        'disruptions':  _AFRICA_FLIGHT_BASELINE,
-        'last_updated': datetime.utcnow().isoformat() + 'Z',
-        'source':       'curated baseline + planned live aggregator',
-    }
+        if (not force
+                and _africa_flights_cache['data'] is not None
+                and _africa_flights_cache['fetched_at'] is not None
+                and (now - _africa_flights_cache['fetched_at']) < _africa_flights_cache['ttl']):
+            cached = _africa_flights_cache['data'].copy()
+            cached['cached'] = True
+            return jsonify(cached)
 
-    cache_set(_FLIGHTS_CACHE_KEY, {
-        'data':       result,
-        'cached_at':  datetime.utcnow().isoformat() + 'Z',
-    })
-    return jsonify(result)
+        result = {
+            'success':       True,
+            'count':         len(_AFRICA_FLIGHT_BASELINE),
+            'disruptions':   _AFRICA_FLIGHT_BASELINE,
+            'last_updated':  datetime.now(timezone.utc).isoformat(),
+            'source':        'curated baseline + planned live aggregator',
+            'cached':        False,
+        }
+
+        _africa_flights_cache['data']       = result
+        _africa_flights_cache['fetched_at'] = now
+
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"[Africa Flights] Endpoint error: {e}")
+        return jsonify({'success': False, 'disruptions': [], 'count': 0, 'error': str(e)}), 500
 
 
 # ============================================================
-# END PATCH — africa.html supporting endpoints
+# END PATCH v2 — africa.html supporting endpoints
 # ============================================================
 
 # ============================================================
