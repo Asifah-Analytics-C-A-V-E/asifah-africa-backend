@@ -8,7 +8,7 @@
 #  divergences are commented inline.
 #
 #  WHEN ADDING NEW DEPS: pin the version. Unpinned deps cause
-#  reproducibility issues across Render rebuilds.
+#  reproducibility issues across Render rebuilds. Test. 
 # ════════════════════════════════════════════════════════════════
 
 # ── Core web framework ────────────────────────────────────────
