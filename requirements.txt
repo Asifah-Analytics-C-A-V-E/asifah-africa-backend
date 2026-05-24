@@ -21,10 +21,15 @@ requests==2.31.0
 urllib3==2.1.0
 
 # ── Telegram OSINT ingestion ──────────────────────────────────
-# Telethon is the Telegram MTProto client; cryptg accelerates
-# decryption on Render's shared CPU.
+# Telethon is the Telegram MTProto client. We deliberately do NOT
+# pin cryptg (the Rust-accelerated crypto helper) — it requires
+# Rust toolchain + a writable cache during build, which Render's
+# build environment doesn't provide. Telethon falls back to a
+# pure-Python crypto path when cryptg isn't available; ~30%
+# slower per message but functionally identical. The deploy
+# attempt on May 24 2026 failed on cryptg's Rust build step;
+# removing it resolved the deploy.
 Telethon==1.34.0
-cryptg==0.4.0
 
 # ── Date / time handling ──────────────────────────────────────
 python-dateutil==2.8.2
