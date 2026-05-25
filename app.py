@@ -116,6 +116,14 @@ except ImportError as e:
     CONVERGENCE_PROXY_AVAILABLE = False
     print(f"[Africa] ⚠️ convergence_proxy_africa not available: {e}")
 
+try:
+    from africa_article_gatherer import register_africa_articles_endpoints
+    ARTICLE_GATHERER_AVAILABLE = True
+    print("[Africa] ✅ africa_article_gatherer loaded")
+except ImportError as e:
+    ARTICLE_GATHERER_AVAILABLE = False
+    print(f"[Africa] ⚠️ africa_article_gatherer not available: {e}")
+
 # ── Future imports (rhetoric trackers, regional BLUF) ──
 # These will fill in over future rounds. Each wrapped in try/except.
 
@@ -1233,6 +1241,7 @@ def health():
             'bluesky_africa':         BLUESKY_AFRICA_AVAILABLE,
             'commodity_proxy':        COMMODITY_PROXY_AVAILABLE,
             'convergence_proxy':      CONVERGENCE_PROXY_AVAILABLE,
+            'article_gatherer':       ARTICLE_GATHERER_AVAILABLE,
             'sudan_rhetoric':         SUDAN_RHETORIC_AVAILABLE,
             'africa_regional_bluf':   AFRICA_BLUF_AVAILABLE,
         },
@@ -1884,6 +1893,13 @@ if CONVERGENCE_PROXY_AVAILABLE:
     except Exception as e:
         print(f'[Africa] ⚠️ Convergence proxy registration failed: {e}')
 
+if ARTICLE_GATHERER_AVAILABLE:
+    try:
+        register_africa_articles_endpoints(app, start_scheduler=True)
+        print('[Africa] ✅ Article gatherer endpoints registered (12h scheduler ON)')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Article gatherer registration failed: {e}')
+
 if SUDAN_RHETORIC_AVAILABLE:
     try:
         register_sudan_rhetoric_endpoints(app)
@@ -1915,6 +1931,7 @@ print(f'  Brave:     {"✅ configured" if BRAVE_API_KEY else "⚠️  not config
 print(f'  Telegram:  {"✅ module loaded" if TELEGRAM_AFRICA_AVAILABLE else "⏳ pending"}')
 print(f'  Bluesky:   {"✅ module loaded" if BLUESKY_AFRICA_AVAILABLE else "⏳ pending"}')
 print(f'  Commodity: {"✅ proxy loaded" if COMMODITY_PROXY_AVAILABLE else "⏳ pending"}')
+print(f'  Articles:  {"✅ gatherer loaded" if ARTICLE_GATHERER_AVAILABLE else "⏳ pending"}')
 print(f'  Sudan:     {"✅ tracker loaded" if SUDAN_RHETORIC_AVAILABLE else "⏳ pending"}')
 print(f'  BLUF:      {"✅ regional BLUF loaded" if AFRICA_BLUF_AVAILABLE else "⏳ pending"}')
 print('=' * 60)
