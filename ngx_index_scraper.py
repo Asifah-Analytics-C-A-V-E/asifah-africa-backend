@@ -1,21 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-NGX Index Scraper — v1.0.0 (May 31 2026)
+NGX Index Scraper — v1.0.3 (May 31 2026)
 ========================================
 
 Pulls real NGX All-Share Index (ASI) from african open data mirrors since Yahoo
 Finance does NOT host this index directly.
 
+v1.0.3 changes from v1.0.0:
+  - DROPPED african-markets.com fallback — the page requires JavaScript rendering
+    to show the ASI, and our requests-based scrape was matching unrelated numbers
+    (Value Traded, Market Cap fragments). Better to show "Unavailable" than wrong data.
+  - Added PLAUSIBILITY SANITY-CHECK: NGX-ASI has been in the 100,000-200,000 range
+    for the past 2+ years. Any matched value outside [50,000 — 500,000] is rejected
+    as obviously wrong, falls through to next pattern.
+  - Added verbose logging on failure: HTTP status code, response size, exception type,
+    truncated response body preview. Helps diagnose Render-side scrape failures.
+
 ARCHITECTURE:
   Primary source:   https://afx.kwayisi.org/ngx/           (kwayisi mirror)
-  Secondary source: https://www.african-markets.com/en/stock-markets/ngse
-  Tertiary fallback: caller's last-known Redis value
-  Quaternary:        None (caller decides what to do)
+  No secondary — if kwayisi fails, caller returns last-known cache or Unavailable.
 
 REGEX STRATEGY:
-  Multi-pattern matching against known string anchors. If the primary site
-  changes structure, we fall through to the secondary. If both fail, we return
-  None and the caller can decide whether to fall back to NGE ETF or last-known.
+  Multi-pattern matching against known string anchors with plausibility check.
 
 CACHE: 1-hour Redis TTL. NGX trades 9-4 WAT Mon-Fri (5 AM - 11 AM ET).
 
@@ -39,8 +45,14 @@ from datetime import datetime, timezone
 # ============================================
 
 KWAYISI_URL = 'https://afx.kwayisi.org/ngx/'
-AFRICAN_MARKETS_URL = 'https://www.african-markets.com/en/stock-markets/ngse'
-SCRAPE_TIMEOUT_SEC = 15
+AFRICAN_MARKETS_URL = 'https://www.african-markets.com/en/stock-markets/ngse'  # kept for reference, no longer used
+SCRAPE_TIMEOUT_SEC = 20  # bumped from 15 — kwayisi can be slow
+
+# NGX ASI plausibility range (v1.0.3 — May 31 2026)
+# ASI has been in the 100,000-170,000 range for the past 2+ years.
+# Outside this band = almost certainly wrong (regex matched unrelated number).
+NGX_ASI_MIN_PLAUSIBLE = 50000     # generous lower bound
+NGX_ASI_MAX_PLAUSIBLE = 500000    # generous upper bound
 
 # Browser-like UA to avoid trivial bot blocks
 USER_AGENT = (
@@ -98,62 +110,72 @@ AFRICAN_MARKETS_PATTERNS = [
 # PARSER
 # ============================================
 
-def _parse_with_patterns(html, patterns, source_name):
+def _parse_with_patterns(html, patterns, source_name, plausibility=(NGX_ASI_MIN_PLAUSIBLE, NGX_ASI_MAX_PLAUSIBLE)):
     """
-    Run regex patterns in order, return first match with parsed numbers.
-    Returns dict with at minimum {value} or None.
+    Run regex patterns in order, return first match with parsed numbers
+    THAT PASSES PLAUSIBILITY CHECK.
+
+    plausibility: (min, max) tuple — values outside this range are rejected.
+                  v1.0.3 — added because v1.0.0 accepted "3,828.68" from
+                  african-markets which was actually a different widget number.
     """
+    min_val, max_val = plausibility
     for i, pattern in enumerate(patterns):
-        m = pattern.search(html)
-        if not m:
-            continue
-        try:
-            groups = m.groupdict()
-            value_str = groups.get('value')
-            change_str = groups.get('change')
-            pct_str = groups.get('pct')
+        for m in pattern.finditer(html):  # iterate ALL matches, not just first
+            try:
+                groups = m.groupdict()
+                value_str = groups.get('value')
+                change_str = groups.get('change')
+                pct_str = groups.get('pct')
 
-            # Convert "160,591.76" → 160591.76
-            value = float(value_str.replace(',', '')) if value_str else None
-            change = float(change_str.replace(',', '')) if change_str else None
-            pct = float(pct_str) if pct_str else None
+                # Convert "160,591.76" → 160591.76
+                value = float(value_str.replace(',', '')) if value_str else None
+                change = float(change_str.replace(',', '')) if change_str else None
+                pct = float(pct_str) if pct_str else None
 
-            # Compute pct from value+change if not directly given
-            if pct is None and value is not None and change is not None and (value - change) != 0:
-                pct = (change / (value - change)) * 100
+                # PLAUSIBILITY CHECK — reject obviously-wrong matches
+                if value is not None and (value < min_val or value > max_val):
+                    print(f'[NGX Scraper] {source_name} pattern #{i+1}: implausible value {value:,.2f} '
+                          f'(outside [{min_val:,}, {max_val:,}]) — rejecting, continuing search')
+                    continue
 
-            # Compute change from value+pct if not directly given
-            if change is None and value is not None and pct is not None:
-                # value = prev * (1 + pct/100), so prev = value / (1 + pct/100), change = value - prev
-                prev = value / (1 + pct / 100) if (1 + pct / 100) != 0 else None
-                if prev is not None:
-                    change = value - prev
+                # Compute pct from value+change if not directly given
+                if pct is None and value is not None and change is not None and (value - change) != 0:
+                    pct = (change / (value - change)) * 100
 
-            if value is None and change is not None and pct is not None and pct != 0:
-                # Edge case: ▴change(pct) line without absolute value
-                # We can't reconstruct absolute value here, skip
+                # Compute change from value+pct if not directly given
+                if change is None and value is not None and pct is not None:
+                    prev = value / (1 + pct / 100) if (1 + pct / 100) != 0 else None
+                    if prev is not None:
+                        change = value - prev
+
+                if value is None and change is not None and pct is not None and pct != 0:
+                    continue
+
+                if value is None:
+                    continue
+
+                print(f'[NGX Scraper] ✅ {source_name} pattern #{i+1} matched: '
+                      f'value={value:,.2f}, change={change}, pct={pct}')
+                return {
+                    'value':  round(value, 2),
+                    'change': round(change, 2) if change is not None else None,
+                    'pct':    round(pct, 3) if pct is not None else None,
+                    'source': source_name,
+                    'pattern_index': i + 1,
+                }
+            except (ValueError, TypeError) as e:
+                print(f'[NGX Scraper] {source_name} pattern #{i+1} matched but parse failed: {e}')
                 continue
-
-            if value is None:
-                continue
-
-            print(f'[NGX Scraper] ✅ {source_name} pattern #{i+1} matched: '
-                  f'value={value:,.2f}, change={change}, pct={pct}')
-            return {
-                'value':  round(value, 2),
-                'change': round(change, 2) if change is not None else None,
-                'pct':    round(pct, 3) if pct is not None else None,
-                'source': source_name,
-                'pattern_index': i + 1,
-            }
-        except (ValueError, TypeError) as e:
-            print(f'[NGX Scraper] {source_name} pattern #{i+1} matched but parse failed: {e}')
-            continue
     return None
 
 
 def _fetch_html(url, timeout=SCRAPE_TIMEOUT_SEC):
-    """Fetch raw HTML with browser-like UA. Returns string or None on failure."""
+    """Fetch raw HTML with browser-like UA. Returns string or None on failure.
+
+    v1.0.3: verbose logging on failure (HTTP code, content length, exception type)
+    to help diagnose Render-side scrape issues.
+    """
     try:
         r = requests.get(
             url,
@@ -165,11 +187,23 @@ def _fetch_html(url, timeout=SCRAPE_TIMEOUT_SEC):
             },
         )
         if r.status_code != 200:
-            print(f'[NGX Scraper] {url} returned HTTP {r.status_code}')
+            preview = (r.text[:200] if r.text else '(empty body)').replace('\n', ' ')
+            print(f'[NGX Scraper] {url} HTTP {r.status_code} | size={len(r.text)} | preview="{preview}"')
             return None
+        if len(r.text) < 500:
+            print(f'[NGX Scraper] {url} suspiciously small response ({len(r.text)} bytes) — likely blocked')
+            print(f'[NGX Scraper] body preview: {r.text[:200]}')
+            return None
+        print(f'[NGX Scraper] {url} OK — {len(r.text):,} bytes')
         return r.text
+    except requests.exceptions.Timeout:
+        print(f'[NGX Scraper] {url} TIMEOUT after {timeout}s')
+        return None
+    except requests.exceptions.ConnectionError as e:
+        print(f'[NGX Scraper] {url} CONNECTION ERROR: {str(e)[:120]}')
+        return None
     except Exception as e:
-        print(f'[NGX Scraper] {url} fetch error: {str(e)[:120]}')
+        print(f'[NGX Scraper] {url} UNEXPECTED ERROR ({type(e).__name__}): {str(e)[:120]}')
         return None
 
 
@@ -179,7 +213,7 @@ def _fetch_html(url, timeout=SCRAPE_TIMEOUT_SEC):
 
 def scrape_ngx_index():
     """
-    Attempt to scrape the NGX All-Share Index from primary then secondary sources.
+    Attempt to scrape the NGX All-Share Index from kwayisi.
 
     Returns dict on success:
       {
@@ -190,9 +224,16 @@ def scrape_ngx_index():
           'pattern_index': int,   # which regex pattern matched
           'scraped_at': ISO datetime str,
       }
-    Returns None if both sources fail.
+    Returns None if kwayisi unreachable or no plausible value found.
+
+    v1.0.3: dropped african-markets fallback. african-markets renders the ASI
+    via JavaScript that our requests-based scraper cannot evaluate. Without JS,
+    the only numbers visible to regex are unrelated widgets (Value Traded,
+    Market Cap fragments), which caused v1.0.0 to return 3,828.68 instead of
+    ~160,591.76. Better to return None and let the caller surface "Unavailable"
+    than to display wrong data. (Data honesty principle.)
     """
-    # Try kwayisi first
+    # Primary (and only) source: kwayisi
     html = _fetch_html(KWAYISI_URL)
     if html:
         parsed = _parse_with_patterns(html, KWAYISI_PATTERNS, 'kwayisi')
@@ -205,22 +246,10 @@ def scrape_ngx_index():
                 'pattern_index':  parsed['pattern_index'],
                 'scraped_at':     datetime.now(timezone.utc).isoformat(),
             }
+        else:
+            print('[NGX Scraper] kwayisi returned HTML but no plausible NGX value found')
 
-    # Fall through to african-markets
-    html = _fetch_html(AFRICAN_MARKETS_URL)
-    if html:
-        parsed = _parse_with_patterns(html, AFRICAN_MARKETS_PATTERNS, 'african-markets')
-        if parsed and parsed.get('value'):
-            return {
-                'value':          parsed['value'],
-                'change_24h':     parsed.get('change'),
-                'change_pct_24h': parsed.get('pct') or 0,
-                'source':         'african-markets.com',
-                'pattern_index':  parsed['pattern_index'],
-                'scraped_at':     datetime.now(timezone.utc).isoformat(),
-            }
-
-    print('[NGX Scraper] ❌ Both primary and secondary sources failed')
+    print('[NGX Scraper] ❌ kwayisi unreachable or value extraction failed')
     return None
 
 
