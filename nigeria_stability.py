@@ -1,41 +1,52 @@
 # -*- coding: utf-8 -*-
 """
-Nigeria Stability Backend — v1.0.1 (May 31 2026)
+Nigeria Stability Backend — v1.0.2 (May 31 2026)
 ================================================
 
 Lives on the Africa backend (asifah-africa-backend.onrender.com) alongside
 the article gatherer, commodity proxy, and Sudan rhetoric tracker.
 
-v1.0.1 ships:
-  - Global X MSCI Nigeria ETF fetcher (Yahoo NGE — US-traded; Yahoo does NOT host the
-    actual NGX All-Share Index so we use the US-listed Nigeria ETF as a proxy)
-  - NGN/USD exchange rate fetcher (Yahoo NGN=X) — INVERTED polarity (rising = weaker naira)
-  - Brent crude full Financial Pulse fetcher (Yahoo BZ=F, with sparkline)
-  - SPARKLINE-derived 24h math: prev_close pulled from sparkline[-2] not meta object.
-    This is more robust on weekends/holidays where Yahoo's `previousClose` can drift
-    to chart-range-start (giving monthly% instead of daily%).
-  - Per-tile market_status (NGE NYSE-Arca Mon-Fri ET, Brent ICE 24/5, NGN/USD FX 24/5)
+v1.0.2 ships:
+  - NGX All-Share Index (real ASI value scraped from kwayisi/african-markets
+    via new ngx_index_scraper.py module — Yahoo Finance does NOT host the NGX
+    index directly, so we scrape with multi-pattern regex resilience)
+  - NGN/USD exchange rate fetcher (Yahoo NGN=X) — INVERTED polarity
+  - Brent crude full Financial Pulse fetcher (Yahoo BZ=F)
+  - SPARKLINE-derived 24h math for Yahoo tiles (NGN/USD + Brent) — robust on weekends
+  - NGX sparkline accumulates from our own scan history (Redis HISTORY_KEY)
+  - Per-tile market_status (NGX Lagos Mon-Fri 09:00-16:00 WAT, Brent ICE 24/5, NGN/USD FX 24/5)
   - 12-hour Redis cache + background refresh
 
-v1.0.1 explicitly does NOT include:
+v1.0.2 explicitly does NOT include:
   - Stability vector scoring (deferred to v1.5)
   - Rhetoric tracker integration (Nigeria has no tracker yet — placeholder on frontend)
   - Humanitarian module
   - FX parallel-market premium (deferred to Black Swan Markets page)
   - Article scanning (handled by africa_article_gatherer)
   - Commodity exposure (handled by commodity_proxy_africa)
-  - Direct NGX All-Share Index — Yahoo coverage gap (would require scraping african-markets.com)
+  - Historical NGX sparkline backfill (sparkline grows organically as we scan daily)
 
 Patterns mirrored from saudi_stability.py for consistency.
 """
 
 import os
+import re
 import json
 import time
 import threading
 import requests
 from datetime import datetime, timezone, timedelta
 from flask import jsonify, request
+
+# NGX scraper (v1.0.2 — May 31 2026): pulls real NGX All-Share Index from
+# african open data mirrors (kwayisi primary, african-markets fallback).
+# Yahoo Finance does not host the NGX index directly.
+try:
+    from ngx_index_scraper import scrape_ngx_index
+    NGX_SCRAPER_AVAILABLE = True
+except ImportError as e:
+    NGX_SCRAPER_AVAILABLE = False
+    print(f'[Nigeria Stability] ⚠️ ngx_index_scraper not available: {e}')
 
 
 # ============================================
@@ -45,7 +56,7 @@ from flask import jsonify, request
 UPSTASH_REDIS_URL = os.environ.get('UPSTASH_REDIS_URL', '').rstrip('/')
 UPSTASH_REDIS_TOKEN = os.environ.get('UPSTASH_REDIS_TOKEN', '')
 
-CACHE_KEY = 'nigeria_stability_v1.0.1'
+CACHE_KEY = 'nigeria_stability_v1.0.2'
 HISTORY_KEY = 'nigeria_stability_history'
 CACHE_TTL = 12 * 3600  # 12 hours
 
@@ -99,33 +110,32 @@ def _redis_set(key, value, ttl=None):
 # MARKET STATUS HELPERS
 # ============================================
 
-def _nge_market_status():
+def _ngx_lagos_market_status():
     """
-    Global X MSCI Nigeria ETF (NGE) trades on NYSE Arca.
-    Hours: Mon-Fri 09:30-16:00 ET (14:30-21:00 UTC during EDT, 14:30-21:00 UTC during EST)
+    Nigerian Exchange Group (NGX) trading hours.
+
+    Per african-markets news (April 27 2026): NGX expanded trading hours to
+    9:00-16:00 WAT Mon-Fri (was previously 9:30-14:30).
+
+    Lagos = UTC+1 year-round (no DST).
     Returns 'open' / 'closed' / 'pre-market' / 'after-hours'.
     """
     now = datetime.now(timezone.utc)
-    weekday = now.weekday()  # Mon=0 ... Sun=6
+    lagos_time = now + timedelta(hours=1)
+    weekday = lagos_time.weekday()  # Mon=0 ... Sun=6
 
     # Weekend = closed
     if weekday >= 5:
         return 'closed'
 
-    # Approximate ET conversion (EDT = UTC-4 in May-Nov, EST = UTC-5 in Nov-Mar)
-    # For simplicity, assume EDT in summer months
-    month = now.month
-    is_edt = 3 <= month <= 10  # rough DST window
-    et_offset_hours = 4 if is_edt else 5
-
-    et_time = now - timedelta(hours=et_offset_hours)
-    h = et_time.hour
-    m = et_time.minute
+    h = lagos_time.hour
+    m = lagos_time.minute
     minutes = h * 60 + m
 
-    open_minutes = 9 * 60 + 30   # 09:30 ET
-    close_minutes = 16 * 60      # 16:00 ET
-    pre_open_minutes = 4 * 60    # 04:00 ET (extended hours start)
+    pre_open_minutes = 8 * 60        # 08:00 (pre-market window)
+    open_minutes     = 9 * 60        # 09:00 (cash market open)
+    close_minutes    = 16 * 60       # 16:00 (cash market close)
+    after_hours_end  = 17 * 60       # 17:00 (after-hours window end)
 
     if minutes < pre_open_minutes:
         return 'closed'
@@ -133,7 +143,7 @@ def _nge_market_status():
         return 'pre-market'
     elif minutes < close_minutes:
         return 'open'
-    elif minutes < 20 * 60:  # 20:00 ET = after-hours end
+    elif minutes < after_hours_end:
         return 'after-hours'
     else:
         return 'closed'
@@ -274,23 +284,147 @@ def _fetch_yahoo_chart(ticker, ticker_url_encoded=None):
         return None
 
 
+def _fetch_ngx_index():
+    """
+    Fetch the NGX All-Share Index by scraping african open data mirrors.
+
+    Primary: afx.kwayisi.org/ngx/  (kwayisi)
+    Secondary: african-markets.com/en/stock-markets/ngse
+
+    Yahoo Finance does NOT host the NGX index directly (confirmed via web search
+    May 31 2026), so we scrape. The scraper module handles regex-based parsing
+    with multi-pattern fallback for site-layout resilience.
+
+    Sparkline: this function does NOT build a 30-day sparkline (the scrape
+    sources don't expose historical chart data in scrapeable form). Instead,
+    we accumulate sparkline data from our OWN historical scan snapshots over
+    time — Redis HISTORY_KEY collects the last 30 values, which the frontend
+    can render as the sparkline.
+
+    Returns Financial Pulse-shaped dict. Returns 'Unavailable' state if both
+    scrape sources fail AND no last-known cache exists.
+    """
+    NGX_LAST_KNOWN_KEY = 'ngx_last_known'
+
+    if not NGX_SCRAPER_AVAILABLE:
+        print('[Nigeria Stability] ⚠️ NGX scraper module not loaded — cannot fetch ASI')
+        return _ngx_last_known_or_unavailable(NGX_LAST_KNOWN_KEY)
+
+    print('[Nigeria Stability] Scraping NGX All-Share Index...')
+    try:
+        scraped = scrape_ngx_index()
+        if scraped is None:
+            raise Exception('Both kwayisi and african-markets unreachable')
+
+        value = scraped['value']
+        change_pct = scraped.get('change_pct_24h', 0) or 0
+
+        # Build sparkline from our own scan history (if available)
+        sparkline = _build_ngx_sparkline_from_history()
+
+        payload = {
+            'index':           'NGX-ASI',
+            'value':           round(value, 2),
+            'change_pct_24h':  round(change_pct, 3),
+            'change_abs_24h':  scraped.get('change_24h'),
+            'trend':           'rising' if change_pct > 0.3 else ('falling' if change_pct < -0.3 else 'flat'),
+            'source':          f"Asifah scrape via {scraped.get('source', 'kwayisi')}",
+            'sparkline':       sparkline,
+            'timestamp':       datetime.now(timezone.utc).isoformat(),
+        }
+        # Cache for last-known fallback (7-day TTL)
+        try:
+            _redis_set(NGX_LAST_KNOWN_KEY, {
+                'value':          payload['value'],
+                'change_pct_24h': payload['change_pct_24h'],
+                'change_abs_24h': payload.get('change_abs_24h'),
+            }, ttl=7 * 24 * 3600)
+        except Exception:
+            pass
+        print(f"[Nigeria Stability] NGX-ASI: {payload['value']:,.2f} ({payload['change_pct_24h']:+.2f}%)")
+        return payload
+    except Exception as e:
+        print(f'[Nigeria Stability] NGX scrape error: {str(e)[:120]}')
+
+    return _ngx_last_known_or_unavailable(NGX_LAST_KNOWN_KEY)
+
+
+def _ngx_last_known_or_unavailable(redis_key):
+    """Return last-known NGX value from Redis, or Unavailable shell."""
+    try:
+        cached = _redis_get(redis_key)
+        if cached:
+            return {
+                'index':           'NGX-ASI',
+                'value':           cached.get('value'),
+                'change_pct_24h':  cached.get('change_pct_24h', 0),
+                'change_abs_24h':  cached.get('change_abs_24h'),
+                'trend':           'unknown',
+                'source':          'Asifah scrape (last known)',
+                'sparkline':       _build_ngx_sparkline_from_history(),
+                'estimated':       True,
+                'timestamp':       datetime.now(timezone.utc).isoformat(),
+            }
+    except Exception:
+        pass
+    return {
+        'index':           'NGX-ASI',
+        'value':           None,
+        'change_pct_24h':  0,
+        'trend':           'unknown',
+        'source':          'Unavailable',
+        'sparkline':       [],
+        'timestamp':       datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _build_ngx_sparkline_from_history():
+    """
+    Build a sparkline from our accumulated scan history (Redis HISTORY_KEY).
+    Returns list of {time, value} suitable for Chart.js.
+
+    Since this is a scraped index, we don't have historical chart data
+    from the source. Sparkline grows organically as we accumulate daily scans.
+    """
+    try:
+        history = _redis_get(HISTORY_KEY) or []
+        sparkline = []
+        for entry in history[-30:]:  # last 30 snapshots
+            ngx_val = entry.get('ngx_value')
+            if ngx_val is None:
+                continue
+            ts_str = entry.get('scanned_at', '')
+            # Extract date portion from ISO timestamp
+            try:
+                date_str = ts_str.split('T')[0] if 'T' in ts_str else ts_str[:10]
+            except Exception:
+                date_str = ts_str
+            sparkline.append({
+                'time':  date_str,
+                'value': round(float(ngx_val), 2),
+            })
+        return sparkline
+    except Exception as e:
+        print(f'[Nigeria Stability] Sparkline build error: {str(e)[:80]}')
+        return []
+
+
 def _fetch_nge_etf():
     """
+    [DEPRECATED IN v1.0.2 — kept as emergency fallback only, not called by scan]
+
     Fetch Global X MSCI Nigeria ETF (NGE) from Yahoo Finance.
     Yahoo ticker: NGE (US-listed NYSE Arca, USD-denominated)
 
-    Note: Yahoo does NOT host the actual Nigerian Exchange NGX All-Share Index.
-    NGE is used as a proxy — it tracks an MSCI-curated basket of ~10-30 Nigerian
-    equities (Dangote Cement, MTN Nigeria, Zenith Bank, GTCO, etc.) traded as a
-    US-listed ETF in USD. This means:
-      - Trading hours = NYSE (Mon-Fri 09:30-16:00 ET), not NGX Lagos hours
-      - Denominated in USD, so naira-devaluation effects are PARTIALLY conflated
-        with equity moves — for cleanest signal, read alongside NGN/USD tile
-      - Reflects international-investor view of Nigeria equity exposure
+    This function was the primary equity fetcher in v1.0.1 but was replaced
+    by _fetch_ngx_index() (real NGX ASI via scraper) in v1.0.2 because NGE is
+    a dormant ETF showing $3.74 with 0.00% daily change for months — it does
+    not represent live Nigerian equity activity.
 
-    Returns Financial Pulse-shaped dict.
+    Kept as one-line-swap emergency fallback if scraper module ever breaks:
+      In run_nigeria_stability_scan(): swap `_fetch_ngx_index()` for `_fetch_nge_etf()`.
     """
-    print('[Nigeria Stability] Fetching Global X MSCI Nigeria ETF (NGE)...')
+    print('[Nigeria Stability] [DEPRECATED] Fetching Global X MSCI Nigeria ETF (NGE)...')
     NGE_LAST_KNOWN_KEY = 'nge_last_known'
     try:
         data = _fetch_yahoo_chart('NGE', 'NGE')
@@ -469,29 +603,31 @@ def _fetch_brent_full():
 # FINANCIAL PULSE ASSEMBLY
 # ============================================
 
-def _build_financial_pulse(nge, ngn, brent):
+def _build_financial_pulse(ngx, ngn, brent):
     """
     Build the canonical Financial Pulse card payload.
-    Tiles: NGE (standard polarity, USD) · NGN/USD (INVERTED — rising = weaker naira) · Brent (standard)
+    Tiles: NGX-ASI (real NGX All-Share, scraped) · NGN/USD (INVERTED) · Brent (standard)
     """
-    nge_status   = _nge_market_status()
+    # NGX trades 9-4 Lagos time Mon-Fri (10-14:30 historically, expanded April 2026)
+    ngx_status   = _ngx_lagos_market_status()
     # NGN/USD is FX — trades essentially 24/5. Mirror Brent's logic for liveness.
     ngn_status   = _brent_market_status()
     brent_status = _brent_market_status()
 
     tiles = {
-        'NGE': {
-            'name':            'MSCI Nigeria ETF',
-            'ticker':          'NGE',
-            'value':           nge.get('value'),
-            'change_pct_24h':  nge.get('change_pct_24h'),
-            'trend':           nge.get('trend'),
-            'tier':            _tier(nge.get('change_pct_24h')),
-            'source':          nge.get('source'),
-            'market_status':   nge_status,
-            'timestamp':       nge.get('timestamp'),
-            'sparkline':       nge.get('sparkline', []),
-            'note':            'US-listed ETF proxy (Yahoo does not host NGX All-Share)',
+        'NGX': {
+            'name':            'NGX All-Share',
+            'ticker':          'NGX-ASI',
+            'value':           ngx.get('value'),
+            'change_pct_24h':  ngx.get('change_pct_24h'),
+            'change_abs_24h':  ngx.get('change_abs_24h'),
+            'trend':           ngx.get('trend'),
+            'tier':            _tier(ngx.get('change_pct_24h')),
+            'source':          ngx.get('source'),
+            'market_status':   ngx_status,
+            'timestamp':       ngx.get('timestamp'),
+            'sparkline':       ngx.get('sparkline', []),
+            'note':            'Real NGX All-Share Index — scraped from kwayisi (Yahoo does not host)',
         },
         'NGNUSD': {
             'name':            'NGN/USD',
@@ -520,7 +656,7 @@ def _build_financial_pulse(nge, ngn, brent):
         },
     }
 
-    agg_status = _aggregate_market_status([nge_status, ngn_status, brent_status])
+    agg_status = _aggregate_market_status([ngx_status, ngn_status, brent_status])
 
     return {
         'country':         'NG',
@@ -552,34 +688,35 @@ def run_nigeria_stability_scan(force=False):
             return cached
 
     # Fetch each tile (independent — one failure does not block others)
-    nge   = _fetch_nge_etf()
+    ngx   = _fetch_ngx_index()    # v1.0.2: scraped from kwayisi/african-markets
     ngn   = _fetch_ngn_usd()
     brent = _fetch_brent_full()
 
-    fp = _build_financial_pulse(nge, ngn, brent)
+    fp = _build_financial_pulse(ngx, ngn, brent)
 
     payload = {
         'country':         'NG',
         'country_name':    'Nigeria',
-        'nge':             nge,
+        'ngx':             ngx,
         'ngn_usd':         ngn,
         'brent':           brent,
         'financial_pulse': fp,
         'scanned_at':      datetime.now(timezone.utc).isoformat(),
         'scan_duration_sec': round(time.time() - scan_start, 1),
         'success':         True,
-        'version':         '1.0.1-nigeria-stability',
+        'version':         '1.0.2-nigeria-stability',
         'from_cache':      False,
     }
 
     _redis_set(CACHE_KEY, payload, ttl=CACHE_TTL)
 
     # History snapshot (no TTL — pruned to last 30 by daily cron, optional future)
+    # ngx_value is critical here — it builds the sparkline organically over time
     try:
         history = _redis_get(HISTORY_KEY) or []
         history.append({
             'scanned_at':     payload['scanned_at'],
-            'nge_value':      nge.get('value'),
+            'ngx_value':      ngx.get('value'),
             'ngn_usd_value':  ngn.get('value'),
             'brent_value':    brent.get('value'),
         })
@@ -589,7 +726,7 @@ def run_nigeria_stability_scan(force=False):
         pass
 
     print(f"[Nigeria Stability] Scan complete in {payload['scan_duration_sec']}s | "
-          f"NGE={nge.get('value')} · NGN/USD={ngn.get('value')} · Brent={brent.get('value')}")
+          f"NGX={ngx.get('value')} · NGN/USD={ngn.get('value')} · Brent={brent.get('value')}")
     return payload
 
 
@@ -652,7 +789,7 @@ def register_nigeria_stability_endpoints(app, start_background=True):
                 'country_name':    'Nigeria',
                 'financial_pulse': payload.get('financial_pulse', {}),
                 'scanned_at':      payload.get('scanned_at'),
-                'version':         '1.0.1-nigeria-stability',
+                'version':         '1.0.2-nigeria-stability',
             })
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)[:200]}), 500
