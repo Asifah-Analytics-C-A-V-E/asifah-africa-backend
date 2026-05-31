@@ -56,7 +56,7 @@ except ImportError as e:
 UPSTASH_REDIS_URL = os.environ.get('UPSTASH_REDIS_URL', '').rstrip('/')
 UPSTASH_REDIS_TOKEN = os.environ.get('UPSTASH_REDIS_TOKEN', '')
 
-CACHE_KEY = 'nigeria_stability_v1.0.2'
+CACHE_KEY = 'nigeria_stability_v1.0.3'
 HISTORY_KEY = 'nigeria_stability_history'
 CACHE_TTL = 12 * 3600  # 12 hours
 
@@ -704,7 +704,7 @@ def run_nigeria_stability_scan(force=False):
         'scanned_at':      datetime.now(timezone.utc).isoformat(),
         'scan_duration_sec': round(time.time() - scan_start, 1),
         'success':         True,
-        'version':         '1.0.2-nigeria-stability',
+        'version':         '1.0.3-nigeria-stability',
         'from_cache':      False,
     }
 
@@ -789,7 +789,7 @@ def register_nigeria_stability_endpoints(app, start_background=True):
                 'country_name':    'Nigeria',
                 'financial_pulse': payload.get('financial_pulse', {}),
                 'scanned_at':      payload.get('scanned_at'),
-                'version':         '1.0.2-nigeria-stability',
+                'version':         '1.0.3-nigeria-stability',
             })
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)[:200]}), 500
