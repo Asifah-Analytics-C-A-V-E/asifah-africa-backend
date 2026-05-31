@@ -146,6 +146,14 @@ except ImportError as e:
     AFRICA_BLUF_AVAILABLE = False
     print(f"[Africa] ⚠️ africa_regional_bluf not yet available: {e}")
 
+try:
+    from nigeria_stability import register_nigeria_stability_endpoints
+    NIGERIA_STABILITY_AVAILABLE = True
+    print("[Africa] ✅ nigeria_stability loaded")
+except ImportError as e:
+    NIGERIA_STABILITY_AVAILABLE = False
+    print(f"[Africa] ⚠️ nigeria_stability not yet available: {e}")
+
 
 # ============================================================
 # FLASK APP
@@ -1914,6 +1922,13 @@ if AFRICA_BLUF_AVAILABLE:
         print('[Africa] ✅ Africa regional BLUF endpoints registered')
     except Exception as e:
         print(f'[Africa] ⚠️ Africa BLUF registration failed: {e}')
+
+if NIGERIA_STABILITY_AVAILABLE:
+    try:
+        register_nigeria_stability_endpoints(app, start_background=True)
+        print('[Africa] ✅ Nigeria stability endpoints registered (12h scheduler ON)')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Nigeria stability registration failed: {e}')
 
 
 # ============================================================
