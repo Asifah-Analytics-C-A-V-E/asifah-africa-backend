@@ -1,30 +1,34 @@
 # -*- coding: utf-8 -*-
 """
-Nigeria Stability Backend — v1.0.2 (May 31 2026)
+Nigeria Stability Backend — v1.0.4 (June 1 2026)
 ================================================
 
 Lives on the Africa backend (asifah-africa-backend.onrender.com) alongside
 the article gatherer, commodity proxy, and Sudan rhetoric tracker.
 
-v1.0.2 ships:
-  - NGX All-Share Index (real ASI value scraped from kwayisi/african-markets
-    via new ngx_index_scraper.py module — Yahoo Finance does NOT host the NGX
-    index directly, so we scrape with multi-pattern regex resilience)
+v1.0.4 ships:
+  - NGX All-Share Index — LAYERED data architecture:
+      Primary:   NGX Pulse API (ngxpulse.ng — proper API with key)
+      Secondary: kwayisi.org scraper (regex-based, defense in depth)
+      Tertiary:  Redis last-known cache
+      Quaternary: "Unavailable" honest failure
   - NGN/USD exchange rate fetcher (Yahoo NGN=X) — INVERTED polarity
   - Brent crude full Financial Pulse fetcher (Yahoo BZ=F)
-  - SPARKLINE-derived 24h math for Yahoo tiles (NGN/USD + Brent) — robust on weekends
-  - NGX sparkline accumulates from our own scan history (Redis HISTORY_KEY)
-  - Per-tile market_status (NGX Lagos Mon-Fri 09:00-16:00 WAT, Brent ICE 24/5, NGN/USD FX 24/5)
+  - SPARKLINE-derived 24h math for Yahoo tiles (NGN/USD + Brent)
+  - NGX sparkline accumulates from our own scan history
+  - Per-tile market_status (NGX Lagos Mon-Fri 09:00-16:00 WAT, Brent ICE 24/5)
   - 12-hour Redis cache + background refresh
 
-v1.0.2 explicitly does NOT include:
+REQUIRES: NGX_PULSE_API_KEY env var on Render (get key at ngxpulse.ng/api).
+If unset, primary is skipped and we fall directly to scraper.
+
+v1.0.4 explicitly does NOT include:
   - Stability vector scoring (deferred to v1.5)
   - Rhetoric tracker integration (Nigeria has no tracker yet — placeholder on frontend)
   - Humanitarian module
   - FX parallel-market premium (deferred to Black Swan Markets page)
   - Article scanning (handled by africa_article_gatherer)
   - Commodity exposure (handled by commodity_proxy_africa)
-  - Historical NGX sparkline backfill (sparkline grows organically as we scan daily)
 
 Patterns mirrored from saudi_stability.py for consistency.
 """
@@ -38,9 +42,18 @@ import requests
 from datetime import datetime, timezone, timedelta
 from flask import jsonify, request
 
-# NGX scraper (v1.0.2 — May 31 2026): pulls real NGX All-Share Index from
-# african open data mirrors (kwayisi primary, african-markets fallback).
-# Yahoo Finance does not host the NGX index directly.
+# NGX Pulse API client (v1.0.4 — June 1 2026): PRIMARY data source for NGX-ASI.
+# Free Personal-tier API at ngxpulse.ng — requires NGX_PULSE_API_KEY env var.
+try:
+    from ngx_pulse_client import fetch_ngx_via_pulse_api
+    NGX_PULSE_AVAILABLE = True
+except ImportError as e:
+    NGX_PULSE_AVAILABLE = False
+    print(f'[Nigeria Stability] ⚠️ ngx_pulse_client not available: {e}')
+
+# NGX scraper (v1.0.2 — May 31 2026): FALLBACK data source.
+# Pulls real NGX All-Share Index from kwayisi (and historically african-markets).
+# Used only if NGX Pulse API fails. Yahoo Finance does not host the NGX index.
 try:
     from ngx_index_scraper import scrape_ngx_index
     NGX_SCRAPER_AVAILABLE = True
@@ -56,7 +69,7 @@ except ImportError as e:
 UPSTASH_REDIS_URL = os.environ.get('UPSTASH_REDIS_URL', '').rstrip('/')
 UPSTASH_REDIS_TOKEN = os.environ.get('UPSTASH_REDIS_TOKEN', '')
 
-CACHE_KEY = 'nigeria_stability_v1.0.3'
+CACHE_KEY = 'nigeria_stability_v1.0.4'
 HISTORY_KEY = 'nigeria_stability_history'
 CACHE_TTL = 12 * 3600  # 12 hours
 
@@ -286,66 +299,93 @@ def _fetch_yahoo_chart(ticker, ticker_url_encoded=None):
 
 def _fetch_ngx_index():
     """
-    Fetch the NGX All-Share Index by scraping african open data mirrors.
+    Fetch the NGX All-Share Index with LAYERED data architecture (v1.0.4).
 
-    Primary: afx.kwayisi.org/ngx/  (kwayisi)
-    Secondary: african-markets.com/en/stock-markets/ngse
+    Tier 1 (Primary):   NGX Pulse API (ngxpulse.ng — proper API with key)
+    Tier 2 (Secondary): kwayisi.org scraper (regex parsing)
+    Tier 3 (Tertiary):  Redis last-known cache (7-day TTL)
+    Tier 4 (Quaternary): "Unavailable" honest failure
 
-    Yahoo Finance does NOT host the NGX index directly (confirmed via web search
-    May 31 2026), so we scrape. The scraper module handles regex-based parsing
-    with multi-pattern fallback for site-layout resilience.
+    Returns Financial Pulse-shaped dict. Each successful tier writes the
+    value to last-known cache for the next tier-3 fallback.
 
-    Sparkline: this function does NOT build a 30-day sparkline (the scrape
-    sources don't expose historical chart data in scrapeable form). Instead,
-    we accumulate sparkline data from our OWN historical scan snapshots over
-    time — Redis HISTORY_KEY collects the last 30 values, which the frontend
-    can render as the sparkline.
-
-    Returns Financial Pulse-shaped dict. Returns 'Unavailable' state if both
-    scrape sources fail AND no last-known cache exists.
+    Sparkline: accumulates from our own scan history (Redis HISTORY_KEY).
     """
     NGX_LAST_KNOWN_KEY = 'ngx_last_known'
 
-    if not NGX_SCRAPER_AVAILABLE:
-        print('[Nigeria Stability] ⚠️ NGX scraper module not loaded — cannot fetch ASI')
-        return _ngx_last_known_or_unavailable(NGX_LAST_KNOWN_KEY)
-
-    print('[Nigeria Stability] Scraping NGX All-Share Index...')
-    try:
-        scraped = scrape_ngx_index()
-        if scraped is None:
-            raise Exception('Both kwayisi and african-markets unreachable')
-
-        value = scraped['value']
-        change_pct = scraped.get('change_pct_24h', 0) or 0
-
-        # Build sparkline from our own scan history (if available)
-        sparkline = _build_ngx_sparkline_from_history()
-
-        payload = {
-            'index':           'NGX-ASI',
-            'value':           round(value, 2),
-            'change_pct_24h':  round(change_pct, 3),
-            'change_abs_24h':  scraped.get('change_24h'),
-            'trend':           'rising' if change_pct > 0.3 else ('falling' if change_pct < -0.3 else 'flat'),
-            'source':          f"Asifah scrape via {scraped.get('source', 'kwayisi')}",
-            'sparkline':       sparkline,
-            'timestamp':       datetime.now(timezone.utc).isoformat(),
-        }
-        # Cache for last-known fallback (7-day TTL)
+    # ─── TIER 1: NGX Pulse API ───────────────────────────────────
+    if NGX_PULSE_AVAILABLE:
+        print('[Nigeria Stability] Trying NGX Pulse API (primary)...')
         try:
-            _redis_set(NGX_LAST_KNOWN_KEY, {
-                'value':          payload['value'],
-                'change_pct_24h': payload['change_pct_24h'],
-                'change_abs_24h': payload.get('change_abs_24h'),
-            }, ttl=7 * 24 * 3600)
-        except Exception:
-            pass
-        print(f"[Nigeria Stability] NGX-ASI: {payload['value']:,.2f} ({payload['change_pct_24h']:+.2f}%)")
-        return payload
-    except Exception as e:
-        print(f'[Nigeria Stability] NGX scrape error: {str(e)[:120]}')
+            pulse_data = fetch_ngx_via_pulse_api()
+            if pulse_data and pulse_data.get('value'):
+                value = pulse_data['value']
+                change_pct = pulse_data.get('change_pct_24h', 0) or 0
+                sparkline = _build_ngx_sparkline_from_history()
 
+                payload = {
+                    'index':           'NGX-ASI',
+                    'value':           round(value, 2),
+                    'change_pct_24h':  round(change_pct, 3),
+                    'change_abs_24h':  pulse_data.get('change_24h'),
+                    'trend':           'rising' if change_pct > 0.3 else ('falling' if change_pct < -0.3 else 'flat'),
+                    'source':          'NGX Pulse API (ngxpulse.ng)',
+                    'sparkline':       sparkline,
+                    'timestamp':       datetime.now(timezone.utc).isoformat(),
+                    # Bonus data from NGX Pulse — useful for future deep-dive features
+                    'market_cap_ngn':  pulse_data.get('market_cap_ngn'),
+                    'breadth_advancers': pulse_data.get('advancers'),
+                    'breadth_decliners': pulse_data.get('decliners'),
+                    'breadth_unchanged': pulse_data.get('unchanged'),
+                }
+                # Cache last-known for tier-3 fallback
+                try:
+                    _redis_set(NGX_LAST_KNOWN_KEY, {
+                        'value':          payload['value'],
+                        'change_pct_24h': payload['change_pct_24h'],
+                        'change_abs_24h': payload.get('change_abs_24h'),
+                    }, ttl=7 * 24 * 3600)
+                except Exception:
+                    pass
+                return payload
+        except Exception as e:
+            print(f'[Nigeria Stability] NGX Pulse error: {str(e)[:120]}')
+
+    # ─── TIER 2: Kwayisi scraper (fallback) ──────────────────────
+    if NGX_SCRAPER_AVAILABLE:
+        print('[Nigeria Stability] Falling back to kwayisi scraper (secondary)...')
+        try:
+            scraped = scrape_ngx_index()
+            if scraped and scraped.get('value'):
+                value = scraped['value']
+                change_pct = scraped.get('change_pct_24h', 0) or 0
+                sparkline = _build_ngx_sparkline_from_history()
+
+                payload = {
+                    'index':           'NGX-ASI',
+                    'value':           round(value, 2),
+                    'change_pct_24h':  round(change_pct, 3),
+                    'change_abs_24h':  scraped.get('change_24h'),
+                    'trend':           'rising' if change_pct > 0.3 else ('falling' if change_pct < -0.3 else 'flat'),
+                    'source':          f"Asifah scrape via {scraped.get('source', 'kwayisi')}",
+                    'sparkline':       sparkline,
+                    'timestamp':       datetime.now(timezone.utc).isoformat(),
+                }
+                try:
+                    _redis_set(NGX_LAST_KNOWN_KEY, {
+                        'value':          payload['value'],
+                        'change_pct_24h': payload['change_pct_24h'],
+                        'change_abs_24h': payload.get('change_abs_24h'),
+                    }, ttl=7 * 24 * 3600)
+                except Exception:
+                    pass
+                print(f"[Nigeria Stability] NGX-ASI (scraped): {payload['value']:,.2f} ({payload['change_pct_24h']:+.2f}%)")
+                return payload
+        except Exception as e:
+            print(f'[Nigeria Stability] Scraper error: {str(e)[:120]}')
+
+    # ─── TIER 3 + 4: Last-known or Unavailable ───────────────────
+    print('[Nigeria Stability] Both Pulse API and scraper failed — checking last-known cache')
     return _ngx_last_known_or_unavailable(NGX_LAST_KNOWN_KEY)
 
 
@@ -704,7 +744,7 @@ def run_nigeria_stability_scan(force=False):
         'scanned_at':      datetime.now(timezone.utc).isoformat(),
         'scan_duration_sec': round(time.time() - scan_start, 1),
         'success':         True,
-        'version':         '1.0.3-nigeria-stability',
+        'version':         '1.0.4-nigeria-stability',
         'from_cache':      False,
     }
 
@@ -789,7 +829,7 @@ def register_nigeria_stability_endpoints(app, start_background=True):
                 'country_name':    'Nigeria',
                 'financial_pulse': payload.get('financial_pulse', {}),
                 'scanned_at':      payload.get('scanned_at'),
-                'version':         '1.0.3-nigeria-stability',
+                'version':         '1.0.4-nigeria-stability',
             })
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)[:200]}), 500
