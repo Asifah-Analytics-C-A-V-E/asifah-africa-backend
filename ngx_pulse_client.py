@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-NGX Pulse API Client — v1.0.0 (June 1 2026)
+NGX Pulse API Client — v1.0.1 (June 1 2026)
 ==========================================
 
 Primary data source for the NGX All-Share Index (ASI).
+
+v1.0.1 fix: unwrap response 'data' object — NGX Pulse wraps payload inside
+{ "success": true, "data": { ... } } rather than serving fields at top level
+as their docs suggested.
 
 Why NGX Pulse:
   - Native Nigerian platform built FOR NGX data (ngxpulse.ng)
@@ -91,8 +95,18 @@ def fetch_ngx_via_pulse_api():
             return None
 
         data = r.json()
-        asi_value = data.get('asi')
-        pct_change = data.get('pct_change')
+
+        # v1.0.1 fix (June 1 2026): NGX Pulse wraps the actual market data
+        # inside a 'data' object — not at the top level as their docs suggested.
+        # Real response shape: { "success": true, "data": { "asi": ..., "pct_change": ..., ... } }
+        # Unwrap before reading fields.
+        if isinstance(data, dict) and 'data' in data and isinstance(data['data'], dict):
+            payload = data['data']
+        else:
+            payload = data  # fallback to top-level (in case API changes back to flat shape)
+
+        asi_value = payload.get('asi')
+        pct_change = payload.get('pct_change')
 
         if asi_value is None:
             print(f'[NGX Pulse] ❌ Response missing "asi" field: {str(data)[:200]}')
@@ -113,13 +127,13 @@ def fetch_ngx_via_pulse_api():
             'value':          round(float(asi_value), 2),
             'change_24h':     round(change_abs, 2) if change_abs is not None else None,
             'change_pct_24h': round(float(pct_change), 3) if pct_change is not None else 0,
-            'market_cap_ngn': data.get('market_cap'),
-            'volume':         data.get('volume'),
-            'value_traded_ngn': data.get('value'),
-            'deals':          data.get('deals'),
-            'advancers':      data.get('advancers'),
-            'decliners':      data.get('decliners'),
-            'unchanged':      data.get('unchanged'),
+            'market_cap_ngn': payload.get('market_cap'),
+            'volume':         payload.get('volume'),
+            'value_traded_ngn': payload.get('value'),
+            'deals':          payload.get('deals'),
+            'advancers':      payload.get('advancers'),
+            'decliners':      payload.get('decliners'),
+            'unchanged':      payload.get('unchanged'),
             'source':         'ngxpulse.ng',
             'scraped_at':     datetime.now(timezone.utc).isoformat(),
         }
