@@ -461,6 +461,81 @@ def fetch_rss(feed_url, max_items=15):
         return []
 
 
+SOCIAL_SOURCE_HINTS = ('reddit', 'r/', 'bluesky', 'bsky', 'telegram', 'social', 'mirror')
+
+REGIONAL_PRESSURE_TERMS = {
+    'kinetic': {
+        'weight': 2.0,
+        'phrases': [
+            'armed clash', 'ambush', 'massacre', 'airstrike', 'drone strike',
+            'shelling', 'village attacked', 'civilian casualties',
+            'border incursion', 'militia attack', 'jihadist attack',
+            'attaque armee', 'massacre', 'embuscade', 'frappe aerienne',
+            'Ø§Ø´ØªØ¨Ø§ÙƒØ§Øª', 'Ù‚ØµÙ', 'Ù…Ø¬Ø²Ø±Ø©', 'Ù‡Ø¬ÙˆÙ…',
+            'mapigano', 'shambulio', 'mauaji',
+        ],
+    },
+    'governance': {
+        'weight': 1.4,
+        'phrases': [
+            'coup', 'junta', 'state of emergency', 'curfew',
+            'election postponed', 'peace deal collapsed',
+            'opposition arrested', 'protest crackdown',
+            'coup d etat', 'junte', 'etat d urgence',
+            'Ø§Ù†Ù‚Ù„Ø§Ø¨', 'Ø­Ø§Ù„Ø© Ø§Ù„Ø·ÙˆØ§Ø±Ø¦', 'Ø­Ø¸Ø± Ø§Ù„ØªØ¬ÙˆÙ„',
+            'mapinduzi', 'hali ya hatari',
+        ],
+    },
+    'humanitarian': {
+        'weight': 1.1,
+        'phrases': [
+            'famine', 'ipc phase 5', 'cholera', 'ebola', 'mass displacement',
+            'refugee surge', 'humanitarian access denied', 'food insecurity',
+            'famine', 'deplacement massif', 'insecurite alimentaire',
+            'Ù…Ø¬Ø§Ø¹Ø©', 'Ù†Ø²ÙˆØ­', 'Ù„Ø§Ø¬Ø¦ÙŠÙ†', 'ÙƒÙˆÙ„ÙŠØ±Ø§',
+            'njaa', 'wakimbizi', 'kipindupindu',
+        ],
+    },
+}
+
+
+def _regional_source_name(article):
+    source = article.get('source', 'Unknown')
+    if isinstance(source, dict):
+        return source.get('name', 'Unknown')
+    return str(source or 'Unknown')
+
+
+def _is_social_source(source_name):
+    source_lower = (source_name or '').lower()
+    return any(hint in source_lower for hint in SOCIAL_SOURCE_HINTS)
+
+
+def _regional_pressure_bonus(text):
+    text_lower = (text or '').lower()
+    labels = []
+    bonus = 0.0
+    for label, config in REGIONAL_PRESSURE_TERMS.items():
+        if any(phrase.lower() in text_lower for phrase in config['phrases']):
+            labels.append(label)
+            bonus += config['weight']
+    return min(bonus, 3.7), labels
+
+
+def _article_recency_weight(article, days):
+    raw_date = article.get('published') or article.get('publishedAt') or ''
+    try:
+        if raw_date:
+            parsed = datetime.fromisoformat(str(raw_date).replace('Z', '+00:00'))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - parsed).total_seconds() / 3600
+            return max(0.35, 1.0 - min(age_hours / max(days * 24, 1), 1.0) * 0.65)
+    except Exception:
+        pass
+    return 0.65
+
+
 # ============================================================
 # COUNTRY CONFIG (14 countries)
 # ============================================================
@@ -1122,22 +1197,58 @@ def scan_country(country_id, days=7):
     de_keywords  = [k.lower() for k in config.get('keywords_deescalation', [])]
     esc_hits = 0
     de_hits = 0
+    pressure_hits = []
+    score_delta = 0.0
+    signal_sources = set()
+    social_signal_count = 0
     for a in all_articles:
         title = (a.get('title') or '').lower()
         desc  = (a.get('description') or '').lower()
         text = title + ' ' + desc
+        source_name = _regional_source_name(a)
+        source_weight = 0.55 if _is_social_source(source_name) else 1.0
+        recency_weight = _article_recency_weight(a, days)
+        pressure_bonus, pressure_labels = _regional_pressure_bonus(text)
+        matched_escalation = False
         for k in esc_keywords:
             if k in text:
                 esc_hits += 1
+                matched_escalation = True
+                signal_sources.add(source_name)
+                if _is_social_source(source_name):
+                    social_signal_count += 1
+                score_delta += (2.0 + pressure_bonus) * source_weight * recency_weight
                 break
+        if pressure_bonus and not matched_escalation:
+            signal_sources.add(source_name)
+            if _is_social_source(source_name):
+                social_signal_count += 1
+            contribution = pressure_bonus * 0.7 * source_weight * recency_weight
+            score_delta += contribution
+            pressure_hits.append({
+                'title': a.get('title', '')[:120],
+                'url': a.get('url', ''),
+                'source': source_name,
+                'published': a.get('published', ''),
+                'pressure_signals': pressure_labels,
+                'contribution': round(contribution, 2),
+            })
         for k in de_keywords:
             if k in text:
                 de_hits += 1
+                score_delta -= 1.8 * recency_weight
                 break
 
     # ── Final score: base + escalation hits - de-escalation hits ──
     base_pct = config.get('base_conflict_pct', 30)
-    score = base_pct + (esc_hits * 2) - (de_hits * 2)
+    unique_sources = len(set(_regional_source_name(a) for a in all_articles))
+    non_social_signal_count = max(0, len(signal_sources) - social_signal_count)
+    source_diversity_bonus = min(4.0, max(0, unique_sources - 4) * 0.25)
+    social_corroboration_bonus = (
+        min(2.5, social_signal_count * 0.25)
+        if social_signal_count and non_social_signal_count >= 2 else 0.0
+    )
+    score = base_pct + score_delta + source_diversity_bonus + social_corroboration_bonus
     score = max(0, min(100, score))
 
     # ── Alert level ──
@@ -1169,6 +1280,17 @@ def scan_country(country_id, days=7):
         },
         'escalation_hits':         esc_hits,
         'deescalation_hits':       de_hits,
+        'pressure_hits':           len(pressure_hits),
+        'scoring_breakdown': {
+            'base_conflict_pct': base_pct,
+            'article_signal_delta': round(score_delta, 2),
+            'source_diversity_bonus': round(source_diversity_bonus, 2),
+            'social_corroboration_bonus': round(social_corroboration_bonus, 2),
+            'unique_sources': unique_sources,
+            'social_signal_count': social_signal_count,
+            'non_social_signal_count': non_social_signal_count,
+        },
+        'pressure_only_signals':   pressure_hits[:8],
         'top_articles':            all_articles[:30],   # cap to avoid bloat
         'cached_at':               datetime.now(timezone.utc).isoformat(),
         'scan_duration_sec':       elapsed,
