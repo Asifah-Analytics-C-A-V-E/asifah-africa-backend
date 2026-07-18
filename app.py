@@ -69,16 +69,7 @@ from flask_cors import CORS
 # below will succeed on next boot.
 
 try:
-    from telegram_signals_africa import (
-        fetch_sudan_telegram_signals,
-        fetch_drc_telegram_signals,
-        fetch_uganda_telegram_signals,
-        fetch_ethiopia_telegram_signals,
-        fetch_nigeria_telegram_signals,
-        fetch_mali_telegram_signals,
-        fetch_kenya_telegram_signals,
-        fetch_southafrica_telegram_signals,
-    )
+    from telegram_signals_africa import fetch_telegram_for_target
     TELEGRAM_AFRICA_AVAILABLE = True
     print("[Africa] ✅ telegram_signals_africa loaded")
 except ImportError as e:
@@ -86,14 +77,7 @@ except ImportError as e:
     print(f"[Africa] ⚠️ telegram_signals_africa not available: {e}")
 
 try:
-    from bluesky_signals_africa import (
-        fetch_sudan_bluesky_signals,
-        fetch_drc_bluesky_signals,
-        fetch_uganda_bluesky_signals,
-        fetch_ethiopia_bluesky_signals,
-        fetch_nigeria_bluesky_signals,
-        fetch_southafrica_bluesky_signals,
-    )
+    from bluesky_signals_africa import fetch_bluesky_for_target
     BLUESKY_AFRICA_AVAILABLE = True
     print("[Africa] ✅ bluesky_signals_africa loaded")
 except ImportError as e:
@@ -1164,6 +1148,20 @@ def scan_country(country_id, days=7):
         gdelt_count += len(articles)
         time.sleep(0.5)
 
+    # ── GDELT Portuguese (Mozambique / lusophone) ──
+    for query in config.get('gdelt_queries_pt', []):
+        articles = fetch_gdelt(query, days=days, language='por')
+        all_articles.extend(articles)
+        gdelt_count += len(articles)
+        time.sleep(0.5)
+
+    # ── GDELT Spanish (Equatorial Guinea) ──
+    for query in config.get('gdelt_queries_es', []):
+        articles = fetch_gdelt(query, days=days, language='spa')
+        all_articles.extend(articles)
+        gdelt_count += len(articles)
+        time.sleep(0.5)
+
     # ── NewsAPI ──
     newsapi_count = 0
     for query in config.get('newsapi_queries', []):
@@ -1191,6 +1189,26 @@ def scan_country(country_id, days=7):
         all_articles.extend(articles)
         rss_count += len(articles)
         time.sleep(0.3)
+
+    # ── Telegram (shared-channel cache + per-country relevance gate) ──
+    telegram_count = 0
+    if TELEGRAM_AFRICA_AVAILABLE:
+        try:
+            tg_articles = fetch_telegram_for_target(country_id)
+            all_articles.extend(tg_articles)
+            telegram_count = len(tg_articles)
+        except Exception as e:
+            print(f'[Africa Scan] {country_id}: telegram fetch FAILED: {str(e)[:100]}')
+
+    # ── Bluesky (public AppView, targets[] routing) ──
+    bluesky_count = 0
+    if BLUESKY_AFRICA_AVAILABLE:
+        try:
+            bs_articles = fetch_bluesky_for_target(country_id, days=days)
+            all_articles.extend(bs_articles)
+            bluesky_count = len(bs_articles)
+        except Exception as e:
+            print(f'[Africa Scan] {country_id}: bluesky fetch FAILED: {str(e)[:100]}')
 
     # ── Score escalation/de-escalation ──
     esc_keywords = [k.lower() for k in config.get('keywords_escalation', [])]
@@ -1273,10 +1291,12 @@ def scan_country(country_id, days=7):
         'context':                 config.get('context', ''),
         'total_articles':          len(all_articles),
         'articles_by_source': {
-            'gdelt':   gdelt_count,
-            'newsapi': newsapi_count,
-            'brave':   brave_count,
-            'rss':     rss_count,
+            'gdelt':    gdelt_count,
+            'newsapi':  newsapi_count,
+            'brave':    brave_count,
+            'rss':      rss_count,
+            'telegram': telegram_count,
+            'bluesky':  bluesky_count,
         },
         'escalation_hits':         esc_hits,
         'deescalation_hits':       de_hits,
