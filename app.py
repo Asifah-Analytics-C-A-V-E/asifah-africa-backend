@@ -8,6 +8,10 @@ LAUNCH COVERAGE (14 countries):
   DRC, Uganda, Rwanda, South Sudan, Kenya, Tanzania, Sudan, Ethiopia,
   Somalia, Nigeria, Mali, Niger, Burkina Faso, South Africa
 
+v1.1 EXPANSION (Jul 2026, +6 countries -- 20 total):
+  CAR 62, Chad 58, Mozambique 48, Guinea 45, Madagascar 45,
+  Equatorial Guinea 40 (base conflict pct, calibrated Jul 18 2026)
+
 DELIBERATELY EXCLUDED (canonical in MENA):
   Morocco, Libya, Egypt -- live in asifah-backend (ME) and are
   mirrored on the Africa dashboard via Redis fingerprint linkage.
@@ -1096,6 +1100,285 @@ COUNTRY_CONFIG = {
             'south africa power restored', 'south africa coalition stable',
         ],
     },
+
+    # ────────────────────────────────────────────────────────────
+    'car': {
+        'name':              'Central African Republic',
+        'flag':              '\U0001f1e8\U0001f1eb',  # CF flag
+        'base_conflict_pct': 62,
+        'context': ('Touadera sworn in for contested third term Mar 2026 '
+                    '(opposition boycott). Wagner absorbed into Africa Corps '
+                    '(~1,500 personnel). Ndassima gold + diamonds underpin '
+                    'Russian presence. MINUSCA drawdown under financial strain.'),
+        'labels': {
+            'low':    'Chronic instability baseline',
+            'medium': 'Armed group / Africa Corps friction',
+            'high':   'Rebel offensive / regime stress',
+            'surge':  'Bangui threat / state-collapse vector',
+        },
+        'gdelt_queries_en': [
+            'central african republic africa corps wagner',
+            'central african republic rebels', 'CAR touadera bangui',
+            'central african republic gold mining russia',
+            'central african republic MINUSCA',
+        ],
+        'gdelt_queries_fr': [
+            'Centrafrique Africa Corps Wagner',
+            'Centrafrique rebelles Bangui',
+            'Centrafrique Touadera',
+        ],
+        'newsapi_queries': [
+            'Central African Republic Africa Corps',
+            'Central African Republic rebels Touadera',
+            'Central African Republic MINUSCA drawdown',
+            'Bangui security',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=central+african+republic+OR+bangui+OR+touadera&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'bangui attack', 'rebels advance', 'rebel offensive',
+            'coup attempt central african', 'minusca withdrawal',
+            'africa corps clash', 'wagner clash', 'cpc offensive',
+            'mass killing central african', 'mutiny bangui',
+        ],
+        'keywords_deescalation': [
+            'ceasefire central african', 'disarmament agreement',
+            'peace deal bangui', 'rebels disband',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'chad': {
+        'name':              'Chad',
+        'flag':              '\U0001f1f9\U0001f1e9',  # TD flag
+        'base_conflict_pct': 58,
+        'context': ('Sudan war spillover: RSF drone strikes into Wadi Fira '
+                    '(17 civilians killed Mar 2026), 1,300km border closed, '
+                    '1.2M+ Sudanese refugees. Boko Haram resurgence -- Lake '
+                    'province emergency May 2026. Deby consolidation; Zaghawa '
+                    'officer-corps fracture risk.'),
+        'labels': {
+            'low':    'Managed pressure baseline',
+            'medium': 'Border spillover / Boko Haram pressure',
+            'high':   'Cross-border strikes / internal fracture',
+            'surge':  'Regime threat / multi-front crisis',
+        },
+        'gdelt_queries_en': [
+            'chad sudan border attack', 'chad rsf drone strike',
+            'chad deby government', 'chad boko haram lake',
+            'chad sudanese refugees', 'chad zaghawa army',
+        ],
+        'gdelt_queries_fr': [
+            'Tchad frontiere Soudan attaque',
+            'Tchad Boko Haram lac',
+            'Tchad Deby armee',
+        ],
+        'newsapi_queries': [
+            'Chad Sudan border strike',
+            'Chad Boko Haram Lake province',
+            'Chad Deby opposition',
+            'Chad refugees Darfur',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=chad+ndjamena+OR+deby+OR+sudan+border&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'drone strike chad', 'rsf attack chad', 'chad retaliation',
+            'boko haram attack chad', 'soldiers killed chad',
+            'mutiny chad', 'coup chad', 'zaghawa defection',
+            'ndjamena attack', 'state of emergency chad',
+        ],
+        'keywords_deescalation': [
+            'chad sudan talks', 'border reopened chad',
+            'ceasefire chad', 'boko haram surrender',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'equatorial_guinea': {
+        'name':              'Equatorial Guinea',
+        'flag':              '\U0001f1ec\U0001f1f6',  # GQ flag
+        'base_conflict_pct': 40,
+        'context': ('Obiang at 47 years in power -- longest-ruling head of '
+                    'state. VP Teodorin consolidating succession via elite '
+                    'purges. Post-oil-boom crisis (ExxonMobil exit). Russian '
+                    'mercenaries reinforce military; capital moving to '
+                    'Ciudad de la Paz.'),
+        'labels': {
+            'low':    'Authoritarian stability baseline',
+            'medium': 'Succession friction / elite purge',
+            'high':   'Succession crisis signals',
+            'surge':  'Regime rupture / coup vector',
+        },
+        'gdelt_queries_en': [
+            'equatorial guinea obiang', 'equatorial guinea teodorin succession',
+            'equatorial guinea coup', 'equatorial guinea oil economy',
+            'equatorial guinea russia military',
+        ],
+        'gdelt_queries_es': [
+            'Guinea Ecuatorial Obiang',
+            'Guinea Ecuatorial Teodorin sucesion',
+        ],
+        'newsapi_queries': [
+            'Equatorial Guinea Obiang succession',
+            'Equatorial Guinea Teodorin',
+            'Equatorial Guinea coup plot',
+            'Equatorial Guinea oil crisis',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=equatorial+guinea+OR+obiang+OR+malabo&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'obiang dead', 'obiang dies', 'obiang hospitalized',
+            'succession crisis', 'coup attempt equatorial',
+            'teodorin purge', 'malabo unrest',
+            'military mutiny equatorial',
+        ],
+        'keywords_deescalation': [
+            'orderly transition', 'succession confirmed',
+            'equatorial guinea reforms',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'guinea': {
+        'name':              'Guinea',
+        'flag':              '\U0001f1ec\U0001f1f3',  # GN flag
+        'base_conflict_pct': 45,
+        'context': ('Doumbouya won Dec 2025 election -- coup leader to elected '
+                    'president, 14-year constitutional runway. AU sanctions '
+                    'lifted. Simandou iron mega-project (majority Chinese-owned) '
+                    'now the economic spine. Opposition repression persists.'),
+        'labels': {
+            'low':    'Consolidation baseline',
+            'medium': 'Protest / repression pressure',
+            'high':   'Unrest escalating / junta stress',
+            'surge':  'Regime crisis / mass uprising',
+        },
+        'gdelt_queries_en': [
+            'guinea conakry doumbouya', 'guinea protests opposition',
+            'guinea simandou iron ore', 'guinea junta repression',
+        ],
+        'gdelt_queries_fr': [
+            'Guinee Conakry Doumbouya',
+            'Guinee manifestations opposition',
+            'Guinee Simandou',
+        ],
+        'newsapi_queries': [
+            'Guinea Doumbouya opposition',
+            'Guinea Conakry protests',
+            'Guinea Simandou mining',
+            'Guinea crackdown civil society',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=guinea+conakry+OR+doumbouya+OR+simandou&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'protests conakry', 'protesters killed guinea',
+            'opposition arrested guinea', 'strike conakry',
+            'mutiny guinea', 'coup attempt guinea',
+            'simandou halted', 'crackdown conakry',
+        ],
+        'keywords_deescalation': [
+            'opposition dialogue guinea', 'prisoners released guinea',
+            'guinea political reforms',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'madagascar': {
+        'name':              'Madagascar',
+        'flag':              '\U0001f1f2\U0001f1ec',  # MG flag
+        'base_conflict_pct': 45,
+        'context': ('Col. Randrianirina (CAPSAT) took power Oct 2025 after '
+                    'Gen-Z protests ousted Rajoelina. Cabinet dissolved Mar '
+                    '2026, anti-corruption chief installed as PM. AU/SADC '
+                    'demand civilian transition + elections. Energy emergency; '
+                    'foiled destabilization plot.'),
+        'labels': {
+            'low':    'Transition baseline',
+            'medium': 'Transition friction / protest pressure',
+            'high':   'Transition crisis / counter-coup signals',
+            'surge':  'State rupture / mass unrest',
+        },
+        'gdelt_queries_en': [
+            'madagascar randrianirina transition', 'madagascar protests',
+            'madagascar military government', 'madagascar elections sadc',
+            'madagascar energy crisis fuel',
+        ],
+        'gdelt_queries_fr': [
+            'Madagascar transition Randrianirina',
+            'Madagascar manifestations Antananarivo',
+            'Madagascar elections',
+        ],
+        'newsapi_queries': [
+            'Madagascar Randrianirina transition',
+            'Madagascar protests Antananarivo',
+            'Madagascar coup plot',
+            'Madagascar SADC elections',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=madagascar+OR+antananarivo+randrianirina&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'counter-coup madagascar', 'coup plot madagascar',
+            'protests antananarivo', 'protesters killed madagascar',
+            'mutiny madagascar', 'state of emergency madagascar',
+            'fuel crisis madagascar', 'blackout antananarivo',
+        ],
+        'keywords_deescalation': [
+            'election date madagascar', 'civilian government madagascar',
+            'transition agreement madagascar', 'sadc agreement madagascar',
+        ],
+    },
+
+    # ────────────────────────────────────────────────────────────
+    'mozambique': {
+        'name':              'Mozambique',
+        'flag':              '\U0001f1f2\U0001f1ff',  # MZ flag
+        'base_conflict_pct': 48,
+        'context': ('IS-Mozambique insurgency intensifying in Cabo Delgado: '
+                    'N380 corridor ambushes, maritime attacks. ~2,000 Rwandan '
+                    'troops reinforced + Tanzanian border force. Chapo dialogue '
+                    'overtures alongside military push. Post-2024 election '
+                    'tensions persist. LNG restart stakes.'),
+        'labels': {
+            'low':    'Contained insurgency baseline',
+            'medium': 'Insurgent tempo rising',
+            'high':   'Corridor / district threat',
+            'surge':  'Major offensive / LNG threat',
+        },
+        'gdelt_queries_en': [
+            'mozambique cabo delgado attack', 'mozambique islamic state insurgents',
+            'mozambique rwanda forces', 'mozambique lng totalenergies',
+            'mozambique mondlane protests',
+        ],
+        'gdelt_queries_pt': [
+            'Mocambique Cabo Delgado ataque',
+            'Mocambique insurgentes',
+            'Mocambique protestos Mondlane',
+        ],
+        'newsapi_queries': [
+            'Mozambique Cabo Delgado attack',
+            'Mozambique ISIS insurgency',
+            'Mozambique LNG security',
+            'Mozambique Mondlane opposition',
+        ],
+        'rss_feeds': [
+            'https://news.google.com/rss/search?q=mozambique+cabo+delgado+OR+maputo&hl=en&gl=US&ceid=US:en',
+        ],
+        'keywords_escalation': [
+            'town falls mozambique', 'mocimboa attack', 'palma attack',
+            'convoy ambush mozambique', 'insurgents seize',
+            'lng suspended', 'maritime attack mozambique',
+            'beheading cabo delgado', 'protests maputo',
+        ],
+        'keywords_deescalation': [
+            'insurgents surrender', 'lng resumes',
+            'cabo delgado dialogue', 'ceasefire mozambique',
+        ],
+    },
 }
 
 
@@ -1314,7 +1597,7 @@ def scan_country(country_id, days=7):
         'top_articles':            all_articles[:30],   # cap to avoid bloat
         'cached_at':               datetime.now(timezone.utc).isoformat(),
         'scan_duration_sec':       elapsed,
-        'backend_version':         '1.0.0',
+        'backend_version':         '1.1.0',
         'cache_status':            'fresh',
     }
 
@@ -1517,20 +1800,26 @@ def api_scan_all():
 # ─────────────────────────────────────────────────────────────
 
 _COUNTRY_DISPLAY_NAMES = {
-    'burkina_faso': 'Burkina Faso',
-    'drc':          'Democratic Republic of Congo',
-    'ethiopia':     'Ethiopia',
-    'kenya':        'Kenya',
-    'mali':         'Mali',
-    'niger':        'Niger',
-    'nigeria':      'Nigeria',
-    'rwanda':       'Rwanda',
-    'somalia':      'Somalia',
-    'south_africa': 'South Africa',
-    'south_sudan':  'South Sudan',
-    'sudan':        'Sudan',
-    'tanzania':     'Tanzania',
-    'uganda':       'Uganda',
+    'burkina_faso':      'Burkina Faso',
+    'car':               'Central African Republic',
+    'chad':              'Chad',
+    'drc':               'Democratic Republic of Congo',
+    'equatorial_guinea': 'Equatorial Guinea',
+    'ethiopia':          'Ethiopia',
+    'guinea':            'Guinea',
+    'kenya':             'Kenya',
+    'madagascar':        'Madagascar',
+    'mali':              'Mali',
+    'mozambique':        'Mozambique',
+    'niger':             'Niger',
+    'nigeria':           'Nigeria',
+    'rwanda':            'Rwanda',
+    'somalia':           'Somalia',
+    'south_africa':      'South Africa',
+    'south_sudan':       'South Sudan',
+    'sudan':             'Sudan',
+    'tanzania':          'Tanzania',
+    'uganda':            'Uganda',
 }
 
 @app.route('/api/africa/countries', methods=['GET'])
@@ -1561,20 +1850,26 @@ AFRICA_TRAVEL_ADVISORY_API = "https://cadataapi.state.gov/api/TravelAdvisories"
 
 # State Dept uses FIPS country codes — these may NOT match ISO codes
 AFRICA_TRAVEL_ADVISORY_CODES = {
-    'burkina_faso': ['UV'],   # Burkina Faso (FIPS — UV)
-    'drc':          ['CG'],   # DRC (FIPS — Congo Kinshasa = CG)
-    'ethiopia':     ['ET'],   # Ethiopia
-    'kenya':        ['KE'],   # Kenya
-    'mali':         ['ML'],   # Mali
-    'niger':        ['NG'],   # Niger (FIPS — NG, confusingly!)
-    'nigeria':      ['NI'],   # Nigeria (FIPS — NI, also confusing)
-    'rwanda':       ['RW'],   # Rwanda
-    'somalia':      ['SO'],   # Somalia
-    'south_africa': ['SF'],   # South Africa (FIPS — SF not ZA!)
-    'south_sudan':  ['OD'],   # South Sudan (FIPS — OD)
-    'sudan':        ['SU'],   # Sudan (FIPS — SU)
-    'tanzania':     ['TZ'],   # Tanzania
-    'uganda':       ['UG'],   # Uganda
+    'burkina_faso':      ['UV'],   # Burkina Faso (FIPS — UV)
+    'car':               ['CT'],   # Central African Republic (FIPS — CT)
+    'chad':              ['CD'],   # Chad (FIPS — CD; NOT DRC, which is CG!)
+    'drc':               ['CG'],   # DRC (FIPS — Congo Kinshasa = CG)
+    'equatorial_guinea': ['EK'],   # Equatorial Guinea (FIPS — EK)
+    'ethiopia':          ['ET'],   # Ethiopia
+    'guinea':            ['GV'],   # Guinea (FIPS — GV; Guinea-Bissau = PU)
+    'kenya':             ['KE'],   # Kenya
+    'madagascar':        ['MA'],   # Madagascar (FIPS — MA; Morocco = MO)
+    'mali':              ['ML'],   # Mali
+    'mozambique':        ['MZ'],   # Mozambique
+    'niger':             ['NG'],   # Niger (FIPS — NG, confusingly!)
+    'nigeria':           ['NI'],   # Nigeria (FIPS — NI, also confusing)
+    'rwanda':            ['RW'],   # Rwanda
+    'somalia':           ['SO'],   # Somalia
+    'south_africa':      ['SF'],   # South Africa (FIPS — SF not ZA!)
+    'south_sudan':       ['OD'],   # South Sudan (FIPS — OD)
+    'sudan':             ['SU'],   # Sudan (FIPS — SU)
+    'tanzania':          ['TZ'],   # Tanzania
+    'uganda':            ['UG'],   # Uganda
 }
 
 AFRICA_TRAVEL_ADVISORY_LEVELS = {
@@ -1717,6 +2012,12 @@ AFRICA_FIRS = {
     'HJJJ': {'country': 'South Sudan',    'flag': '🇸🇸', 'name': 'Juba FIR'},
     'HSSS': {'country': 'Sudan',          'flag': '🇸🇩', 'name': 'Khartoum FIR'},
     'HUEN': {'country': 'Uganda',         'flag': '🇺🇬', 'name': 'Entebbe FIR'},
+    'FTTT': {'country': 'Chad',           'flag': '🇹🇩', 'name': "N'Djamena FIR"},
+    'FMMM': {'country': 'Madagascar',     'flag': '🇲🇬', 'name': 'Antananarivo FIR'},
+    'FQBE': {'country': 'Mozambique',     'flag': '🇲🇿', 'name': 'Beira FIR'},
+    # Multi-country FIRs (ASECNA / joint) — cover new targets without own FIR
+    'FCCC': {'country': 'Central Africa', 'flag': '🇨🇫', 'name': 'Brazzaville FIR (CAR / Eq. Guinea / Congo / Gabon)'},
+    'GLRB': {'country': 'West Africa',    'flag': '🇬🇳', 'name': 'Roberts FIR (Guinea / Liberia / Sierra Leone)'},
     # Neighboring FIRs (high-context spillover)
     'HLLL': {'country': 'Libya',          'flag': '🇱🇾', 'name': 'Tripoli FIR'},
     'GMMM': {'country': 'Morocco',        'flag': '🇲🇦', 'name': 'Casablanca FIR'},
