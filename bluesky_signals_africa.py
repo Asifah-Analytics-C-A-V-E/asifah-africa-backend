@@ -22,6 +22,9 @@ Returns the same article dict shape as the canonical scan pipeline,
 so downstream scoring works unchanged.
 
 v1.0.0 — May 24 2026 — Initial Africa backend launch.
+v1.1.0 — Jul 18 2026 — targets extended for CAR, Chad, Eq. Guinea,
+                        Mozambique, Madagascar, Guinea; dead 'sahel'
+                        routing key replaced with real country keys.
 """
 
 import requests
@@ -78,26 +81,28 @@ BLUESKY_ACCOUNTS_AFRICA = [
                                               'south_sudan', 'kenya', 'tanzania'],
         'WHO Africa (if native) — Ebola response'),
     ('msf.bsky.social',                0.9, ['drc', 'sudan', 'south_sudan',
-                                              'somalia', 'nigeria'],
+                                              'somalia', 'nigeria', 'car',
+                                              'chad', 'mozambique'],
         'Médecins Sans Frontières / Doctors Without Borders (if native)'),
 
     # ── AFRICOM / DoD ──
     ('africom.bsky.social',            1.0, ['*'],
         'US AFRICOM (if native) — military posture statements'),
     ('deptofdefense.govmirrors.com',   1.0, ['somalia', 'nigeria',
-                                              'mali', 'niger'],
+                                              'mali', 'niger', 'mozambique'],
         'DoD (X mirror) — counter-terror operations Africa'),
 
     # ── Mediator countries / regional ──
     ('eu-mission.bsky.social',         0.9, ['sudan', 'drc', 'mali',
                                               'niger', 'south_africa'],
         'EU Africa mission (if native)'),
-    ('nato.bsky.social',               0.9, ['sahel', 'mali', 'niger'],
+    ('nato.bsky.social',               0.9, ['mali', 'niger', 'burkina_faso',
+                                              'chad'],
         'NATO (if native) — Sahel adjacent posture'),
 
     # ── Sahel / Wagner watch ──
     ('wartranslated.bsky.social',      0.9, ['mali', 'niger', 'burkina_faso',
-                                              'sudan'],
+                                              'sudan', 'car', 'chad'],
         'War Translated — Russian-language primary source translation'),
 ]
 

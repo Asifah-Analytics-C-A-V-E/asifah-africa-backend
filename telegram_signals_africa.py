@@ -1,27 +1,47 @@
 """
 ========================================
-TELEGRAM — Africa OSINT Channel Monitor (v1.0.0)
+TELEGRAM — Africa OSINT Channel Monitor (v2.0.0)
 ========================================
 Mirrors telegram_signals_europe.py + telegram_signals_me.py pattern.
 
-Per-country wrapper functions (fetch_<country>_telegram_signals) for the
-8 Tier-1 African countries with verified or known-active Telegram OSINT
-channels. Countries without strong Telegram coverage (Tanzania, Rwanda,
-Niger, Burkina Faso, South Africa, South Sudan) fall through to GDELT/
-NewsAPI/RSS via the canonical scan pipeline.
+v2.0.0 ARCHITECTURE CHANGE (July 2026):
+  The v1 design listed the same shared OSINT channels (OSINTdefender,
+  ClashReport, AfricaIntelligence...) under every country, which meant:
+    (a) a full scan cycle fetched the SAME channel once per country
+        (8+ redundant Telethon fetches -> flood-wait exposure), and
+    (b) every country's article pool received ALL posts from shared
+        channels regardless of relevance -- a Darfur atrocity post
+        could add pressure-bonus points to Kenya's score (signal bleed
+        = manufactured convergence, doctrine violation).
+
+  v2 fixes both:
+    1. SHARED_CHANNELS are fetched ONCE per cycle and cached in-process
+       (30 min TTL). Every country call reads the cache.
+    2. Shared-channel posts pass a per-country RELEVANCE GATE (the post
+       text must contain at least one country-specific term) before
+       entering that country's pool.
+    3. COUNTRY_CHANNELS (country-dedicated channels like DabangaSudan)
+       are fetched per-country and skip the gate.
+    4. Generic dispatch: app.py calls fetch_telegram_for_target(key).
+       No per-country wrapper imports needed. (Thin wrappers kept below
+       for backward compatibility.)
 
 NOTE: African Telegram OSINT is THIN compared to Middle East / Europe.
 Many channels we'd want (state media, militia formal channels) are
-Arabic-only or run on Facebook/WhatsApp instead. The handles below
-were verified active as of May 24 2026; if a channel goes dark we
-graceful-degrade via the canonical try/except pattern.
+Arabic-only or run on Facebook/WhatsApp instead. If a channel goes
+dark we graceful-degrade via the canonical try/except pattern.
 
 v1.0.0 — May 24 2026 — initial Africa backend launch (14 countries).
+v2.0.0 — Jul 18 2026 — shared-channel cache + relevance gate + generic
+                        dispatch; relevance terms for 20 countries
+                        (14 launch + CAR, Chad, Eq. Guinea, Mozambique,
+                        Madagascar, Guinea).
 """
 
 import os
 import base64
 import asyncio
+import time
 from datetime import datetime, timezone, timedelta
 
 # ── Telethon soft-dependency ──────────────────────────────────
@@ -46,82 +66,74 @@ TELEGRAM_SESSION_BASE64 = os.environ.get('TELEGRAM_SESSION_BASE64')
 
 
 # ============================================================
-# CHANNEL DIRECTORIES (per country)
+# CHANNEL DIRECTORIES
 # ============================================================
 
-# ── SUDAN ──
-# Active war: RSF + SAF + UAE + Egypt + Sudanese diaspora media.
-# Mostly Arabic; some English. RSF and SAF both run official channels
-# of varying reliability.
-SUDAN_CHANNELS = [
-    'sudaneseTribune',     # Sudan Tribune (English)
-    'DabangaSudan',        # Radio Dabanga (English + Arabic)
-    'AfricaIntelligence',  # Africa-wide OSINT (English)
-    'OSINTdefender',       # General OSINT, often covers Sudan
-    'wartranslated',       # Translations of primary sources
-    'ClashReport',         # Conflict OSINT (often covers Sudan/Darfur)
-    'sudanwatch',          # Sudan watch (English)
+# ── SHARED channels: broad OSINT coverage spanning many African
+#    theaters. Fetched ONCE per cycle, cached, then gated per
+#    country by COUNTRY_RELEVANCE_TERMS below. ──
+SHARED_CHANNELS = [
+    'AfricaIntelligence',   # Africa-wide OSINT (English)
+    'OSINTdefender',        # General OSINT, frequent Africa coverage
+    'ClashReport',          # Conflict OSINT (Sudan/Darfur/Sahel)
+    'wartranslated',        # Russian-language primary source translation
+    'MiddleEastSpectator',  # Wagner / Russia / IS-affiliate coverage
 ]
 
-# ── DRC ──
-# Ebola PHEIC + M23 active. French + English. Limited Telegram presence;
-# most local coverage on Twitter/X.
-DRC_CHANNELS = [
-    'AfricaIntelligence',
-    'OSINTdefender',
-    'wartranslated',
-    'ClashReport',
-    'MiddleEastSpectator',  # Wagner/Russia coverage spills into DRC
-]
+# ── COUNTRY-DEDICATED channels: fetched per-country, NO relevance
+#    gate (the channel itself is the relevance filter). ──
+COUNTRY_CHANNELS = {
+    'sudan': [
+        'sudaneseTribune',   # Sudan Tribune (English)
+        'DabangaSudan',      # Radio Dabanga (English + Arabic)
+        'sudanwatch',        # Sudan watch (English)
+    ],
+    # Other countries fall through to shared channels only.
+    # Add dedicated handles here as they are verified
+    # (check t.me/s/<handle> loads a public preview first).
+}
 
-# ── UGANDA ──
-UGANDA_CHANNELS = [
-    'AfricaIntelligence',
-    'OSINTdefender',
-    'ClashReport',
-]
-
-# ── ETHIOPIA ──
-ETHIOPIA_CHANNELS = [
-    'AfricaIntelligence',
-    'OSINTdefender',
-    'ClashReport',
-    'wartranslated',
-]
-
-# ── NIGERIA ──
-# Boko Haram + ISWAP coverage; Nigerian government less Telegram-active.
-NIGERIA_CHANNELS = [
-    'AfricaIntelligence',
-    'OSINTdefender',
-    'ClashReport',
-    'MiddleEastSpectator',  # ISWAP/IS coverage
-]
-
-# ── MALI ──
-# Wagner / Africa Corps heavily-covered on Russia-aligned Telegram.
-# French + Russian + English.
-MALI_CHANNELS = [
-    'AfricaIntelligence',
-    'OSINTdefender',
-    'ClashReport',
-    'wartranslated',
-    'MiddleEastSpectator',  # Wagner / Russia coverage
-]
-
-# ── KENYA ──
-KENYA_CHANNELS = [
-    'AfricaIntelligence',
-    'OSINTdefender',
-    'ClashReport',
-]
-
-# ── SOUTH AFRICA ──
-SOUTHAFRICA_CHANNELS = [
-    'AfricaIntelligence',
-    'OSINTdefender',
-    'ClashReport',
-]
+# ── RELEVANCE GATE terms (lowercase substrings).
+#    A shared-channel post enters a country's pool only if its
+#    title+description contains at least one of these terms.
+#    Substring gotchas handled deliberately:
+#      - ' mali' (leading space) so 'somalia' does not match Mali
+#      - Guinea uses ONLY distinctive terms (never bare 'guinea',
+#        which matches Equatorial Guinea / Guinea-Bissau / PNG)
+#      - Niger uses 'niamey'/'nigerien' etc. (bare 'niger' matches
+#        'nigeria')
+COUNTRY_RELEVANCE_TERMS = {
+    # ── launch 14 ──
+    'sudan':        ['sudan', 'rsf', 'darfur', 'el fasher', 'khartoum',
+                     'hemedti', 'burhan', 'port sudan'],
+    'south_sudan':  ['south sudan', 'juba', 'kiir', 'machar'],
+    'drc':          ['congo', 'drc', 'm23', 'goma', 'kivu', 'ituri',
+                     'kinshasa'],
+    'uganda':       ['uganda', 'kampala', 'museveni'],
+    'rwanda':       ['rwanda', 'kigali', 'kagame'],
+    'kenya':        ['kenya', 'nairobi'],
+    'tanzania':     ['tanzania', 'dar es salaam', 'dodoma'],
+    'ethiopia':     ['ethiopia', 'tigray', 'amhara', 'addis ababa',
+                     'abiy', 'gerd'],
+    'somalia':      ['somalia', 'shabaab', 'shabab', 'mogadishu'],
+    'nigeria':      ['nigeria', 'boko haram', 'iswap', 'abuja',
+                     'niger delta'],
+    'mali':         [' mali', 'bamako', 'jnim', 'azawad', 'kidal',
+                     'goita'],
+    'niger':        ['niamey', 'tchiani', 'agadez', 'nigerien'],
+    'burkina_faso': ['burkina', 'ouagadougou', 'traore'],
+    'south_africa': ['south africa', 'johannesburg', 'pretoria',
+                     'eskom', 'ramaphosa'],
+    # ── July 2026 additions ──
+    'car':               ['central african republic', 'bangui',
+                          'touadera'],
+    'chad':              ['chad', "n'djamena", 'ndjamena', 'deby'],
+    'equatorial_guinea': ['equatorial guinea', 'malabo', 'obiang',
+                          'bioko'],
+    'mozambique':        ['mozambique', 'cabo delgado', 'maputo'],
+    'madagascar':        ['madagascar', 'antananarivo'],
+    'guinea':            ['conakry', 'doumbouya', 'simandou'],
+}
 
 
 # ============================================================
@@ -272,40 +284,146 @@ def _run_async_fetch(channels, hours_back):
 
 
 # ============================================================
-# PER-COUNTRY WRAPPERS
+# SHARED-CHANNEL CACHE (fetched once per cycle, 30 min TTL)
+# ============================================================
+
+_SHARED_CACHE = {
+    'messages':   [],
+    'fetched_at': 0.0,      # time.time() epoch seconds
+    'ttl':        1800,     # 30 minutes -- one full 14+ country
+                            # scan cycle reuses a single fetch
+    'window_h':   120,      # shared fetch always pulls the widest
+                            # window; callers re-filter to their own
+}
+
+
+def _get_shared_messages():
+    """
+    Return shared-channel messages, fetching at most once per TTL.
+    Absence-honest: on fetch failure the cache is NOT poisoned with
+    an empty 'fresh' result -- a stale cache (if any) is preferred
+    over pretending the feeds are quiet.
+    """
+    now = time.time()
+    age = now - _SHARED_CACHE['fetched_at']
+    if _SHARED_CACHE['fetched_at'] and age < _SHARED_CACHE['ttl']:
+        print(f"[Telegram Africa] shared cache hit "
+              f"({len(_SHARED_CACHE['messages'])} msgs, age {int(age)}s)")
+        return _SHARED_CACHE['messages']
+
+    fetched = _run_async_fetch(SHARED_CHANNELS, _SHARED_CACHE['window_h'])
+    if fetched:
+        _SHARED_CACHE['messages'] = fetched
+        _SHARED_CACHE['fetched_at'] = now
+    else:
+        print("[Telegram Africa] ⚠️ shared fetch returned 0 messages -- "
+              "keeping previous cache (absence-honest)")
+    return _SHARED_CACHE['messages']
+
+
+def _within_window(msg, hours_back):
+    """True if the message timestamp is inside the caller's window."""
+    try:
+        pub = datetime.fromisoformat(msg.get('published', ''))
+        if pub.tzinfo is None:
+            pub = pub.replace(tzinfo=timezone.utc)
+        return pub > datetime.now(timezone.utc) - timedelta(hours=hours_back)
+    except Exception:
+        return True   # keep on parse failure (better than losing signal)
+
+
+# ============================================================
+# GENERIC DISPATCH (what app.py calls)
+# ============================================================
+
+def fetch_telegram_for_target(target, hours_back=96):
+    """
+    Return Telegram articles relevant to one Africa country key.
+
+      1. Country-dedicated channels (COUNTRY_CHANNELS) -> fetched
+         directly, no gate.
+      2. Shared channels -> read from the cycle cache, then pass
+         the per-country relevance gate (COUNTRY_RELEVANCE_TERMS).
+      3. Dedup by URL, window-filter to hours_back.
+
+    Unknown target keys return shared-gated results only if terms
+    exist; otherwise empty list (absence-honest, logged).
+    """
+    if not _telegram_available():
+        print(f"[Telegram Africa] {target}: unavailable -- skipping")
+        return []
+
+    results = []
+    seen_urls = set()
+
+    # ── 1. dedicated channels (ungated) ──
+    dedicated = COUNTRY_CHANNELS.get(target, [])
+    if dedicated:
+        for msg in _run_async_fetch(dedicated, hours_back):
+            if msg['url'] not in seen_urls:
+                seen_urls.add(msg['url'])
+                results.append(msg)
+
+    # ── 2. shared channels (gated) ──
+    terms = COUNTRY_RELEVANCE_TERMS.get(target)
+    if terms is None:
+        print(f"[Telegram Africa] {target}: no relevance terms defined -- "
+              f"shared channels skipped (add to COUNTRY_RELEVANCE_TERMS)")
+    else:
+        gated_in = 0
+        gated_out = 0
+        for msg in _get_shared_messages():
+            if msg['url'] in seen_urls:
+                continue
+            if not _within_window(msg, hours_back):
+                continue
+            text = ((msg.get('title') or '') + ' '
+                    + (msg.get('description') or '')).lower()
+            if any(t in text for t in terms):
+                seen_urls.add(msg['url'])
+                results.append(msg)
+                gated_in += 1
+            else:
+                gated_out += 1
+        print(f"[Telegram Africa] {target}: shared gate kept {gated_in}, "
+              f"dropped {gated_out}")
+
+    print(f"[Telegram Africa] {target}: {len(results)} total "
+          f"(dedicated={len(dedicated)} channels, window={hours_back}h)")
+    return results
+
+
+# ============================================================
+# PER-COUNTRY WRAPPERS (backward compatibility -- thin aliases)
 # ============================================================
 
 def fetch_sudan_telegram_signals(hours_back=72):
-    """Telegram signals for Sudan rhetoric tracker. 72h window — active war."""
-    return _run_async_fetch(SUDAN_CHANNELS, hours_back)
+    return fetch_telegram_for_target('sudan', hours_back)
 
 
 def fetch_drc_telegram_signals(hours_back=72):
-    """Telegram signals for DRC tracker. 72h window — Ebola + M23 fast moving."""
-    return _run_async_fetch(DRC_CHANNELS, hours_back)
+    return fetch_telegram_for_target('drc', hours_back)
 
 
 def fetch_uganda_telegram_signals(hours_back=120):
-    """Telegram signals for Uganda. 120h (5 day) — slower tempo."""
-    return _run_async_fetch(UGANDA_CHANNELS, hours_back)
+    return fetch_telegram_for_target('uganda', hours_back)
 
 
 def fetch_ethiopia_telegram_signals(hours_back=120):
-    return _run_async_fetch(ETHIOPIA_CHANNELS, hours_back)
+    return fetch_telegram_for_target('ethiopia', hours_back)
 
 
 def fetch_nigeria_telegram_signals(hours_back=120):
-    return _run_async_fetch(NIGERIA_CHANNELS, hours_back)
+    return fetch_telegram_for_target('nigeria', hours_back)
 
 
 def fetch_mali_telegram_signals(hours_back=72):
-    """Mali tracker — 72h. Wagner / JNIM activity fast-moving."""
-    return _run_async_fetch(MALI_CHANNELS, hours_back)
+    return fetch_telegram_for_target('mali', hours_back)
 
 
 def fetch_kenya_telegram_signals(hours_back=120):
-    return _run_async_fetch(KENYA_CHANNELS, hours_back)
+    return fetch_telegram_for_target('kenya', hours_back)
 
 
 def fetch_southafrica_telegram_signals(hours_back=120):
-    return _run_async_fetch(SOUTHAFRICA_CHANNELS, hours_back)
+    return fetch_telegram_for_target('south_africa', hours_back)
