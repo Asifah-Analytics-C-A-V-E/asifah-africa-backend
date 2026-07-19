@@ -112,6 +112,14 @@ except ImportError as e:
     ARTICLE_GATHERER_AVAILABLE = False
     print(f"[Africa] ⚠️ africa_article_gatherer not available: {e}")
 
+try:
+    from somalia_humanitarian import register_somalia_humanitarian_endpoints
+    SOMALIA_HUMANITARIAN_AVAILABLE = True
+    print("[Africa] ✅ somalia_humanitarian loaded")
+except ImportError as e:
+    SOMALIA_HUMANITARIAN_AVAILABLE = False
+    print(f"[Africa] ⚠️ somalia_humanitarian not available: {e}")
+
 # ── Future imports (rhetoric trackers, regional BLUF) ──
 # These will fill in over future rounds. Each wrapped in try/except.
 
@@ -892,6 +900,7 @@ COUNTRY_CONFIG = {
         ],
         'rss_feeds': [
             'https://news.google.com/rss/search?q=somalia+OR+mogadishu+shabaab&hl=en&gl=US&ceid=US:en',
+            'https://news.google.com/rss/search?q=somalia+(site:garoweonline.com+OR+site:hiiraan.com)&hl=en&gl=US&ceid=US:en',
         ],
         'keywords_escalation': [
             'mogadishu attack', 'al-shabaab takes town', 'AUSSOM withdraws',
@@ -1597,7 +1606,7 @@ def scan_country(country_id, days=7):
         'top_articles':            all_articles[:30],   # cap to avoid bloat
         'cached_at':               datetime.now(timezone.utc).isoformat(),
         'scan_duration_sec':       elapsed,
-        'backend_version':         '1.1.0',
+        'backend_version':         '1.2.0',
         'cache_status':            'fresh',
     }
 
@@ -2350,6 +2359,12 @@ if ARTICLE_GATHERER_AVAILABLE:
         print('[Africa] ✅ Article gatherer endpoints registered (12h scheduler ON)')
     except Exception as e:
         print(f'[Africa] ⚠️ Article gatherer registration failed: {e}')
+
+if SOMALIA_HUMANITARIAN_AVAILABLE:
+    try:
+        register_somalia_humanitarian_endpoints(app)
+    except Exception as e:
+        print(f'[Africa] ⚠️ Somalia humanitarian registration failed: {e}')
 
 if SUDAN_RHETORIC_AVAILABLE:
     try:
