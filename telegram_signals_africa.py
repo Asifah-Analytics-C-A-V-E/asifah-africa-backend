@@ -36,6 +36,12 @@ v2.0.0 — Jul 18 2026 — shared-channel cache + relevance gate + generic
                         dispatch; relevance terms for 20 countries
                         (14 launch + CAR, Chad, Eq. Guinea, Mozambique,
                         Madagascar, Guinea).
+v2.1.0 — Jul 19 2026 — gate WIDENED (demonyms + spelling variants: the
+                        first production cycle kept 1 of 134 shared msgs;
+                        demonym matching is how OSINT channels actually
+                        write). Dead Sudan handles pruned (UsernameInvalid
+                        in prod logs). ' malian' keeps its leading space:
+                        'somalian' contains 'malian'.
 """
 
 import os
@@ -84,9 +90,10 @@ SHARED_CHANNELS = [
 #    gate (the channel itself is the relevance filter). ──
 COUNTRY_CHANNELS = {
     'sudan': [
-        'sudaneseTribune',   # Sudan Tribune (English)
-        'DabangaSudan',      # Radio Dabanga (English + Arabic)
-        'sudanwatch',        # Sudan watch (English)
+        # sudaneseTribune + DabangaSudan pruned Jul 19 2026 -- production
+        # logs show UsernameInvalid (dead/renamed). Verify replacements at
+        # t.me/s/<handle> before adding.
+        'sudanwatch',        # Sudan watch (English) -- resolves, low volume
     ],
     # Other countries fall through to shared channels only.
     # Add dedicated handles here as they are verified
@@ -104,34 +111,38 @@ COUNTRY_CHANNELS = {
 #        'nigeria')
 COUNTRY_RELEVANCE_TERMS = {
     # ── launch 14 ──
-    'sudan':        ['sudan', 'rsf', 'darfur', 'el fasher', 'khartoum',
+    'sudan':        ['sudan', 'sudanese', 'rsf', 'darfur', 'el fasher',
+                     'el-fasher', 'al-fashir', 'kordofan', 'khartoum',
                      'hemedti', 'burhan', 'port sudan'],
-    'south_sudan':  ['south sudan', 'juba', 'kiir', 'machar'],
-    'drc':          ['congo', 'drc', 'm23', 'goma', 'kivu', 'ituri',
-                     'kinshasa'],
-    'uganda':       ['uganda', 'kampala', 'museveni'],
-    'rwanda':       ['rwanda', 'kigali', 'kagame'],
-    'kenya':        ['kenya', 'nairobi'],
-    'tanzania':     ['tanzania', 'dar es salaam', 'dodoma'],
-    'ethiopia':     ['ethiopia', 'tigray', 'amhara', 'addis ababa',
-                     'abiy', 'gerd'],
-    'somalia':      ['somalia', 'shabaab', 'shabab', 'mogadishu'],
-    'nigeria':      ['nigeria', 'boko haram', 'iswap', 'abuja',
-                     'niger delta'],
-    'mali':         [' mali', 'bamako', 'jnim', 'azawad', 'kidal',
-                     'goita'],
+    'south_sudan':  ['south sudan', 'south sudanese', 'juba', 'kiir', 'machar'],
+    'drc':          ['congo', 'congolese', 'drc', 'm23', 'goma', 'kivu',
+                     'ituri', 'kinshasa'],
+    'uganda':       ['uganda', 'ugandan', 'kampala', 'museveni'],
+    'rwanda':       ['rwanda', 'rwandan', 'kigali', 'kagame'],
+    'kenya':        ['kenya', 'kenyan', 'nairobi'],
+    'tanzania':     ['tanzania', 'tanzanian', 'dar es salaam', 'dodoma'],
+    'ethiopia':     ['ethiopia', 'ethiopian', 'tigray', 'amhara',
+                     'addis ababa', 'abiy', 'gerd'],
+    'somalia':      ['somalia', 'somali ', 'shabaab', 'al-shabaab',
+                     'shabab', 'mogadishu', 'aussom', 'puntland'],
+    'nigeria':      ['nigeria', 'nigerian', 'boko haram', 'iswap',
+                     'abuja', 'niger delta'],
+    'mali':         [' mali', ' malian', 'bamako', 'jnim', 'azawad',
+                     'kidal', 'goita', 'wagner mali'],
     'niger':        ['niamey', 'tchiani', 'agadez', 'nigerien'],
-    'burkina_faso': ['burkina', 'ouagadougou', 'traore'],
-    'south_africa': ['south africa', 'johannesburg', 'pretoria',
-                     'eskom', 'ramaphosa'],
+    'burkina_faso': ['burkina', 'burkinabe', 'ouagadougou', 'traore'],
+    'south_africa': ['south africa', 'south african', 'johannesburg',
+                     'pretoria', 'eskom', 'ramaphosa'],
     # ── July 2026 additions ──
-    'car':               ['central african republic', 'bangui',
+    'car':               ['central african', 'centrafrique', 'bangui',
                           'touadera'],
-    'chad':              ['chad', "n'djamena", 'ndjamena', 'deby'],
+    'chad':              ['chad', 'chadian', 'tchad', "n'djamena",
+                          'ndjamena', 'deby'],
     'equatorial_guinea': ['equatorial guinea', 'malabo', 'obiang',
                           'bioko'],
-    'mozambique':        ['mozambique', 'cabo delgado', 'maputo'],
-    'madagascar':        ['madagascar', 'antananarivo'],
+    'mozambique':        ['mozambique', 'mozambican', 'cabo delgado',
+                          'maputo'],
+    'madagascar':        ['madagascar', 'malagasy', 'antananarivo'],
     'guinea':            ['conakry', 'doumbouya', 'simandou'],
 }
 

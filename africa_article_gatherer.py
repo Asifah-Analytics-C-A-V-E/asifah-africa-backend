@@ -2,6 +2,20 @@
 africa_article_gatherer.py
 Asifah Analytics -- Africa Backend Module
 v1.0.0 -- May 25, 2026
+v1.1.0 -- Jul 19 2026 -- FIELD REPAIR ROUND:
+  * Redis writer swapped to the app.py-PROVEN command-array pattern
+    (the /set/{key} raw-body variant failed silently: 'Redis OK: False'
+    on every store -- articles gathered then dropped on the floor)
+  * ElementTree falsy-element bug fixed (find(a) or find(b) discards
+    valid elements with no children -> RSS total-zero wipeout)
+  * Brave cache TTL 12h->22h (12h expired exactly at the next cycle)
+  * GDELT circuit breaker (first 429 short-circuits the run)
+  * Brave run budget (45 fresh calls) + max 3 queries/country
+  * Dead/blocked RSS repaired via Google News site proxies
+    (feeds.reuters.com retired, ISS broken XML, ICG 403)
+  * Threat-scan article reuse (africa_country:{id} top_articles merged
+    into buckets -- zero-cost news + the only socials source)
+  * +6 countries: CAR, Chad, Eq. Guinea, Guinea, Madagascar, Mozambique
 
 AFRICA-SPECIFIC ARTICLE GATHERER
 
@@ -86,7 +100,7 @@ BRAVE_CACHE_PREFIX  = 'africa:articles:brave:'
 
 # Cache TTLs
 ARTICLES_CACHE_TTL  = 12 * 3600     # 12 hours
-BRAVE_CACHE_TTL     = 12 * 3600     # 12 hours
+BRAVE_CACHE_TTL     = 22 * 3600     # 22h -- MUST outlive the 12h cycle, else zero reuse
 SCAN_INTERVAL_HOURS = 12
 
 # Scan tuning
@@ -101,6 +115,16 @@ ARTICLE_AGE_DAYS_KEEP = 14          # discard articles older than 14 days
 # Global state for scheduler
 _gatherer_running = False
 _gatherer_lock    = threading.Lock()
+
+# GDELT circuit breaker (per-run): first 429 short-circuits ALL remaining
+# GDELT calls for the run -- the IP is shared with the threat scanner and
+# humanitarian gatherer, so retrying dozens more times just burns the run.
+_gdelt_tripped = False
+
+# Brave per-run budget: bounds worst-case fresh calls (cold cache + GDELT
+# down) to protect the shared ~5-6k/month platform quota.
+BRAVE_RUN_BUDGET = 45
+_brave_spent = 0
 
 
 # ============================================================
@@ -132,22 +156,22 @@ def _redis_get(key):
 
 
 def _redis_set(key, value, ttl=ARTICLES_CACHE_TTL):
-    """Direct Upstash REST SET with EX param."""
+    """Upstash REST SET -- command-array to base URL (the pattern PROVEN
+    working in app.py on this backend; the /set/{key} raw-body variant
+    silently failed and poisoned every gather run with Redis OK: False)."""
     if not UPSTASH_REDIS_URL or not UPSTASH_REDIS_TOKEN:
         return False
     try:
-        payload = json.dumps(value, default=str) if not isinstance(value, str) else value
+        payload = ['SET', key, json.dumps(value, default=str)]
+        if ttl:
+            payload.extend(['EX', str(ttl)])
         resp = requests.post(
-            f"{UPSTASH_REDIS_URL}/set/{key}",
-            headers={
-                "Authorization": f"Bearer {UPSTASH_REDIS_TOKEN}",
-                "Content-Type":  "application/json",
-            },
-            data=payload,
-            params={"EX": ttl} if ttl else {},
-            timeout=5,
+            UPSTASH_REDIS_URL,
+            headers={"Authorization": f"Bearer {UPSTASH_REDIS_TOKEN}"},
+            json=payload,
+            timeout=8,
         )
-        return resp.json().get('result') == 'OK'
+        return resp.status_code == 200
     except Exception as e:
         print(f"[africa_articles] Redis SET error ({key}): {str(e)[:80]}")
         return False
@@ -262,6 +286,49 @@ COUNTRY_CONFIG = {
         'capital':      'Kampala',
         'franco':       False,
     },
+    # ── Jul 2026 expansion (matches app.py v1.1 roster) ──
+    'car': {
+        'display_name': 'Central African Republic',
+        'gdelt_terms':  '"Central African Republic" OR Bangui OR Touadera',
+        'sub_themes':   ['Africa Corps CAR', 'Bangui rebels', 'MINUSCA'],
+        'capital':      'Bangui',
+        'franco':       True,
+    },
+    'chad': {
+        'display_name': 'Chad',
+        'gdelt_terms':  'Chad OR Ndjamena OR Deby',
+        'sub_themes':   ['Chad Sudan border', 'Boko Haram Chad', 'Deby'],
+        'capital':      'Ndjamena',
+        'franco':       True,
+    },
+    'equatorial_guinea': {
+        'display_name': 'Equatorial Guinea',
+        'gdelt_terms':  '"Equatorial Guinea" OR Malabo OR Obiang',
+        'sub_themes':   ['Obiang succession', 'Equatorial Guinea oil'],
+        'capital':      'Malabo',
+        'franco':       False,
+    },
+    'guinea': {
+        'display_name': 'Guinea',
+        'gdelt_terms':  'Guinea Conakry OR Doumbouya OR Simandou',
+        'sub_themes':   ['Doumbouya', 'Simandou iron ore', 'Conakry protests'],
+        'capital':      'Conakry',
+        'franco':       True,
+    },
+    'madagascar': {
+        'display_name': 'Madagascar',
+        'gdelt_terms':  'Madagascar OR Antananarivo OR Randrianirina',
+        'sub_themes':   ['Madagascar transition', 'Madagascar energy crisis'],
+        'capital':      'Antananarivo',
+        'franco':       True,
+    },
+    'mozambique': {
+        'display_name': 'Mozambique',
+        'gdelt_terms':  'Mozambique OR "Cabo Delgado" OR Maputo',
+        'sub_themes':   ['Cabo Delgado insurgency', 'Mozambique LNG', 'Mondlane'],
+        'capital':      'Maputo',
+        'franco':       False,
+    },
 }
 
 
@@ -280,16 +347,14 @@ AFRICA_WIDE_RSS_FEEDS = [
     ("https://www.unhcr.org/rss/news.xml",                                 1.0,  "ngos"),
     # Tier 3: Africa generalist outlets
     ("https://www.aljazeera.com/xml/rss/all.xml",                          0.95, "news"),
-    ("https://feeds.reuters.com/reuters/africaNews",                       0.95, "news"),
-    # Tier 4: ISS Africa + ACSS think-tank feeds
-    ("https://issafrica.org/rss/topics/southern-africa.xml",               0.9,  "ngos"),
-    ("https://issafrica.org/rss/topics/east-africa.xml",                   0.9,  "ngos"),
-    ("https://issafrica.org/rss/topics/west-africa.xml",                   0.9,  "ngos"),
-    ("https://issafrica.org/rss/topics/horn-of-africa.xml",                0.9,  "ngos"),
-    # Tier 5: WHO Africa region health feeds
-    ("https://news.google.com/rss/search?q=%22WHO+Africa%22+OR+%22WHO+AFRO%22+outbreak&hl=en&gl=US&ceid=US:en",  1.0, "ngos"),
-    # Tier 6: ICG (International Crisis Group) Africa
-    ("https://www.crisisgroup.org/crisiswatch/feed.xml",                   0.95, "ngos"),
+    # feeds.reuters.com is DEAD (service retired) -> Google News site proxy
+    ("https://news.google.com/rss/search?q=africa+site:reuters.com&hl=en&gl=US&ceid=US:en", 0.95, "news"),
+    # Tier 4: think tanks -- ISS native feeds serve broken XML, ICG 403s
+    # bot traffic; Google News site proxies are the reliable path.
+    ("https://news.google.com/rss/search?q=site:issafrica.org&hl=en&gl=US&ceid=US:en",      0.9,  "ngos"),
+    ("https://news.google.com/rss/search?q=africa+site:crisisgroup.org&hl=en&gl=US&ceid=US:en", 0.95, "ngos"),
+    # Tier 5: WHO Africa region health (loosened -- quoted form returned 0)
+    ("https://news.google.com/rss/search?q=WHO+Africa+outbreak+OR+cholera+OR+ebola&hl=en&gl=US&ceid=US:en",  1.0, "ngos"),
 ]
 
 
@@ -359,22 +424,34 @@ def _fetch_rss_feed(url, weight=1.0, bucket='news'):
             return articles
 
         # Handle both RSS 2.0 and Atom
-        items = root.findall('.//item') or root.findall('.//{http://www.w3.org/2005/Atom}entry')
+        items = root.findall('.//item')
+        if not items:
+            items = root.findall('.//{http://www.w3.org/2005/Atom}entry')
         for item in items[:50]:   # cap per feed
+            # NOTE: ElementTree elements with no CHILDREN are falsy even when
+            # they carry text -- `find(a) or find(b)` silently discards every
+            # valid <title>/<link>. This was the root cause of the
+            # "Total Africa-wide RSS: 0" wipeout. Always test `is None`.
             # Title
-            title_el = item.find('title') or item.find('{http://www.w3.org/2005/Atom}title')
+            title_el = item.find('title')
+            if title_el is None:
+                title_el = item.find('{http://www.w3.org/2005/Atom}title')
             title = title_el.text.strip() if (title_el is not None and title_el.text) else ''
             # Link
-            link_el = item.find('link') or item.find('{http://www.w3.org/2005/Atom}link')
+            link_el = item.find('link')
+            if link_el is None:
+                link_el = item.find('{http://www.w3.org/2005/Atom}link')
             if link_el is not None:
                 link = link_el.text or link_el.get('href') or ''
                 link = link.strip()
             else:
                 link = ''
             # Description / summary
-            desc_el = (item.find('description')
-                       or item.find('{http://www.w3.org/2005/Atom}summary')
-                       or item.find('{http://www.w3.org/2005/Atom}content'))
+            desc_el = item.find('description')
+            if desc_el is None:
+                desc_el = item.find('{http://www.w3.org/2005/Atom}summary')
+            if desc_el is None:
+                desc_el = item.find('{http://www.w3.org/2005/Atom}content')
             description = (desc_el.text or '').strip() if desc_el is not None else ''
             # Strip basic HTML tags
             description = description.replace('<![CDATA[', '').replace(']]>', '')
@@ -382,9 +459,11 @@ def _fetch_rss_feed(url, weight=1.0, bucket='news'):
                 description = description.replace(tag, ' ')
             description = ' '.join(description.split())[:500]
             # Published date
-            pub_el = (item.find('pubDate')
-                      or item.find('{http://www.w3.org/2005/Atom}published')
-                      or item.find('{http://www.w3.org/2005/Atom}updated'))
+            pub_el = item.find('pubDate')
+            if pub_el is None:
+                pub_el = item.find('{http://www.w3.org/2005/Atom}published')
+            if pub_el is None:
+                pub_el = item.find('{http://www.w3.org/2005/Atom}updated')
             published = _parse_rss_date(pub_el.text if pub_el is not None else None)
 
             if title and link:
@@ -417,6 +496,9 @@ def fetch_all_africa_wide_rss():
 # GDELT FETCH (per-country)
 # ============================================================
 def _fetch_gdelt_query(query, lang='eng', country_id=None):
+    global _gdelt_tripped
+    if _gdelt_tripped:
+        return []
     """Fetch one GDELT query in one language. Returns list of article dicts."""
     articles = []
     try:
@@ -431,6 +513,9 @@ def _fetch_gdelt_query(query, lang='eng', country_id=None):
         resp = requests.get(GDELT_BASE_URL, params=params, timeout=GDELT_TIMEOUT)
         if resp.status_code != 200:
             print(f"[africa_articles] GDELT HTTP {resp.status_code} '{query[:30]}'")
+            if resp.status_code == 429:
+                _gdelt_tripped = True
+                print('[africa_articles] GDELT circuit breaker TRIPPED -- skipping remaining GDELT queries this run')
             return articles
 
         payload = resp.json() if resp.content else {}
@@ -467,7 +552,8 @@ def fetch_gdelt_for_country(country_id):
 # BRAVE SEARCH FETCH (last-resort, cached)
 # ============================================================
 def _fetch_brave_query(query, country_id=None, force_refresh=False):
-    """Fetch one Brave Search news query, cached for 12h."""
+    """Fetch one Brave Search news query (cache-first; budget-gated)."""
+    global _brave_spent
     if not BRAVE_API_KEY:
         return []
 
@@ -476,6 +562,11 @@ def _fetch_brave_query(query, country_id=None, force_refresh=False):
         cached = _redis_get(cache_key)
         if cached and isinstance(cached, list):
             return cached
+
+    if _brave_spent >= BRAVE_RUN_BUDGET:
+        print(f"[africa_articles] Brave budget exhausted ({BRAVE_RUN_BUDGET}/run) -- skipping '{query[:40]}'")
+        return []
+    _brave_spent += 1
 
     articles = []
     try:
@@ -520,7 +611,7 @@ def _fetch_brave_query(query, country_id=None, force_refresh=False):
 def fetch_brave_for_country(country_id):
     """Fetch Brave fallback queries for one country."""
     all_articles = []
-    for query in build_brave_queries(country_id):
+    for query in build_brave_queries(country_id)[:3]:   # quota discipline: max 3/country
         articles = _fetch_brave_query(query, country_id=country_id)
         all_articles.extend(articles)
         time.sleep(1.1)  # Brave is 1 req/sec
@@ -659,6 +750,9 @@ def run_gather(force=False):
          f. Write to Redis key africa:articles:<country>
       3. Write metrics + lastrun keys
     """
+    global _gdelt_tripped, _brave_spent
+    _gdelt_tripped = False
+    _brave_spent = 0
     start_ts = time.time()
     print(f"[africa_articles] === Starting gather run at {datetime.now(timezone.utc).isoformat()} ===")
 
@@ -692,8 +786,30 @@ def run_gather(force=False):
             brave_articles = fetch_brave_for_country(country_id)
             print(f"[africa_articles]   Brave: {len(brave_articles)}")
 
+        # 2c-bis. Reuse the threat scanner's already-fetched articles
+        # (africa_country:{id} -> top_articles). ZERO extra fetching; this
+        # is also the ONLY source of socials (Telegram/Bluesky) here.
+        scan_articles = []
+        scan_cache = _redis_get(f'africa_country:{country_id}')
+        if scan_cache:
+            for a in (scan_cache.get('top_articles') or []):
+                stype = (a.get('source_type') or '').lower()
+                sname = (a.get('source') or '')
+                is_social = (stype in ('telegram', 'bluesky', 'reddit')
+                             or sname.lower().startswith(('telegram', 'bluesky', 'reddit')))
+                scan_articles.append({
+                    'title':       (a.get('title') or '')[:300],
+                    'url':         a.get('url') or '',
+                    'published':   a.get('published') or '',
+                    'description': (a.get('description') or '')[:500],
+                    'source':      sname or 'Threat scan',
+                    'weight':      0.85,
+                    'bucket':      'socials' if is_social else 'news',
+                })
+            print(f"[africa_articles]   threat-scan reuse: {len(scan_articles)}")
+
         # 2d. Combine + dedupe + sort + filter
-        combined = wide_matches + gdelt_articles + brave_articles
+        combined = wide_matches + gdelt_articles + brave_articles + scan_articles
         combined = dedupe_articles(combined)
         combined = discard_old_articles(combined)
         combined = sort_articles_by_date(combined)
