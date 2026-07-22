@@ -120,6 +120,14 @@ except ImportError as e:
     SOMALIA_HUMANITARIAN_AVAILABLE = False
     print(f"[Africa] ⚠️ somalia_humanitarian not available: {e}")
 
+try:
+    from rhetoric_tracker_somalia import register_somalia_rhetoric_routes
+    SOMALIA_RHETORIC_AVAILABLE = True
+    print("[Africa] ✅ rhetoric_tracker_somalia loaded")
+except ImportError as e:
+    SOMALIA_RHETORIC_AVAILABLE = False
+    print(f"[Africa] ⚠️ rhetoric_tracker_somalia not available: {e}")
+
 # ── Future imports (rhetoric trackers, regional BLUF) ──
 # These will fill in over future rounds. Each wrapped in try/except.
 
@@ -1606,7 +1614,7 @@ def scan_country(country_id, days=7):
         'top_articles':            all_articles[:30],   # cap to avoid bloat
         'cached_at':               datetime.now(timezone.utc).isoformat(),
         'scan_duration_sec':       elapsed,
-        'backend_version':         '1.2.0',
+        'backend_version':         '1.3.0',
         'cache_status':            'fresh',
     }
 
@@ -1985,8 +1993,17 @@ def api_africa_travel_advisories():
         data['timestamp'] = datetime.now(timezone.utc).isoformat()
         data['cached'] = False
 
-        _africa_travel_advisory_cache['data'] = data
-        _africa_travel_advisory_cache['fetched_at'] = now
+        if data.get('success'):
+            # Only a SUCCESSFUL scan may enter the cache -- a transient
+            # state.gov failure must never poison 24h of advisories.
+            _africa_travel_advisory_cache['data'] = data
+            _africa_travel_advisory_cache['fetched_at'] = now
+        elif _africa_travel_advisory_cache['data'] is not None:
+            # Failed scan with a prior good cache: absence-honest stale-serve.
+            stale = _africa_travel_advisory_cache['data'].copy()
+            stale['cached'] = True
+            stale['stale'] = True
+            return jsonify(stale)
 
         return jsonify(data)
     except Exception as e:
@@ -2365,6 +2382,12 @@ if SOMALIA_HUMANITARIAN_AVAILABLE:
         register_somalia_humanitarian_endpoints(app)
     except Exception as e:
         print(f'[Africa] ⚠️ Somalia humanitarian registration failed: {e}')
+
+if SOMALIA_RHETORIC_AVAILABLE:
+    try:
+        register_somalia_rhetoric_routes(app, start_background=True)
+    except Exception as e:
+        print(f'[Africa] ⚠️ Somalia rhetoric registration failed: {e}')
 
 if SUDAN_RHETORIC_AVAILABLE:
     try:
