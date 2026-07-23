@@ -158,52 +158,32 @@ def _redis_get(key):
 def _redis_set(key, value, ttl=ARTICLES_CACHE_TTL):
     """Upstash REST SET.
 
-    v1.0.1 (Jul 2026) -- FIX: the previous command-array-to-base-URL POST
-    returned redis_ok:False on EVERY write (all countries, including 0-article
-    payloads, so not a size issue). This version uses the PATH-STYLE convention
-    that pairs with this file's own working `_redis_get` (`{URL}/get/{key}`):
-    POST to `{URL}/set/{key}?EX={ttl}` with the JSON value as the raw body.
-    Success is judged by Upstash's response body ({"result":"OK"}), not a bare
-    status-code check -- Upstash can return 200 with an error body, or a
-    success shape we were mis-reading before.
+    v1.0.2 (Jul 2026) -- Use the EXACT command-array pattern proven working in
+    somalia_humanitarian.py on this same Africa backend (that module's cache
+    populates fine). The earlier dual-attempt / strict-body-check version was
+    over-engineered: its success check could mis-read a 200 as failure and then
+    fall through to a genuinely-failing path-style write, reporting redis_ok:
+    False even when the command-array write had actually landed. This mirrors
+    the known-good writer verbatim; returns True on a clean HTTP 200 so scan
+    metrics reflect reality.
     """
     if not UPSTASH_REDIS_URL or not UPSTASH_REDIS_TOKEN:
         return False
-    val = json.dumps(value, default=str)
-    hdr = {"Authorization": f"Bearer {UPSTASH_REDIS_TOKEN}"}
-
-    def _ok(resp):
-        try:
-            return resp.ok and (resp.json().get('result') == 'OK')
-        except (ValueError, TypeError):
-            return resp.status_code == 200
-
-    # Attempt A: command-array to base URL (the pattern used by the rhetoric
-    # trackers on this backend). json= sends a JSON-array body.
     try:
-        cmd = ['SET', key, val] + (['EX', str(int(ttl))] if ttl else [])
-        rA = requests.post(UPSTASH_REDIS_URL, headers=hdr, json=cmd, timeout=8)
-        if _ok(rA):
-            return True
-        _bodyA = rA.text[:150]
+        resp = requests.post(
+            UPSTASH_REDIS_URL,
+            headers={'Authorization': 'Bearer %s' % UPSTASH_REDIS_TOKEN},
+            json=['SET', key, json.dumps(value, default=str), 'EX', str(ttl)],
+            timeout=8,
+        )
+        ok = (resp.status_code == 200)
+        if not ok:
+            print("[africa_articles] Redis SET HTTP %s (%s): %s"
+                  % (resp.status_code, key, resp.text[:120]))
+        return ok
     except Exception as e:
-        _bodyA = f"exc {str(e)[:80]}"
-
-    # Attempt B: path-style SET (the convention that pairs with this file's
-    # working `_redis_get` -> `{URL}/get/{key}`). Value as raw body.
-    try:
-        url = f"{UPSTASH_REDIS_URL}/set/{key}" + (f"?EX={int(ttl)}" if ttl else "")
-        rB = requests.post(url, headers=hdr, data=val, timeout=8)
-        if _ok(rB):
-            return True
-        _bodyB = rB.text[:150]
-    except Exception as e:
-        _bodyB = f"exc {str(e)[:80]}"
-
-    # Both failed -- surface the real reason (was a silent False before).
-    print(f"[africa_articles] Redis SET FAILED ({key}): "
-          f"cmd-array=[{_bodyA}]  path-style=[{_bodyB}]")
-    return False
+        print("[africa_articles] Redis SET error (%s): %s" % (key, str(e)[:100]))
+        return False
 
 
 # ============================================================
@@ -1061,6 +1041,6 @@ def register_africa_articles_endpoints(app, start_scheduler=True):
 # ============================================================
 # MODULE METADATA
 # ============================================================
-__version__   = '1.0.1'
+__version__   = '1.0.2'
 __module_id__ = 'africa_article_gatherer'
 print(f'[Africa Article Gatherer] Module loaded -- v{__version__}')
