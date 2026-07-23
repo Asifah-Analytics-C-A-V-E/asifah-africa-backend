@@ -594,9 +594,14 @@ def _build_signals(posture, trackers):
             s.setdefault('color', '#6b7280')
             s.setdefault('short_text', '')
             s.setdefault('long_text', s.get('short_text', ''))
-            # Prefix with country so regional context survives into GPI
+            # Prefix with country so regional context survives into GPI.
+            # v1.0.1 (Jul 23 2026) FIX: the old check was startswith(disp), but
+            # tracker signals arrive already prefixed with FLAG + name
+            # ("SO SOMALIA: ..."), so startswith('SOMALIA') was False and the
+            # prefix was applied twice ("SO SOMALIA: SO SOMALIA: ..."). Test
+            # whether the country is named anywhere in the text instead.
             disp = THEATRE_DISPLAY.get(theatre, theatre.upper())
-            if not s['short_text'].startswith(disp):
+            if disp.upper() not in s['short_text'].upper():
                 s['short_text'] = '%s %s: %s' % (flag, disp, s['short_text'])
             all_signals.append(s)
 
@@ -758,7 +763,7 @@ def build_regional_bluf(force=False):
             'picture_complete':   (len(trackers_missing) == 0),
             'theatre_summary':    theatre_summary,
             'generated_at':       datetime.now(timezone.utc).isoformat(),
-            'version':            '1.0.0',
+            'version':            '1.0.1',
             'methodology_note':   (
                 'How to read this: country scores are rhetoric-signal composites -- '
                 'weighted volume and severity of classified statements from officials, '
