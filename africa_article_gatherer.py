@@ -168,6 +168,15 @@ def _redis_set(key, value, ttl=ARTICLES_CACHE_TTL):
     metrics reflect reality.
     """
     if not UPSTASH_REDIS_URL or not UPSTASH_REDIS_TOKEN:
+        print("[africa_articles] Redis SET skipped -- URL or TOKEN not set")
+        return False
+    if not UPSTASH_REDIS_URL.startswith('http'):
+        # Classic env-var trap: the var holds a redis:// connection string
+        # instead of the Upstash https REST endpoint, so requests.post raises
+        # before it ever reaches Upstash and every write silently returns False.
+        print("[africa_articles] Redis SET ABORT -- UPSTASH_REDIS_URL is not an "
+              "https REST URL (starts with '%s...'). Upstash REST needs the "
+              "https:// endpoint, not a redis:// string." % UPSTASH_REDIS_URL[:10])
         return False
     try:
         resp = requests.post(
@@ -178,11 +187,12 @@ def _redis_set(key, value, ttl=ARTICLES_CACHE_TTL):
         )
         ok = (resp.status_code == 200)
         if not ok:
-            print("[africa_articles] Redis SET HTTP %s (%s): %s"
-                  % (resp.status_code, key, resp.text[:120]))
+            print("[africa_articles] Redis SET FAILED (%s): HTTP %s body=%s"
+                  % (key, resp.status_code, resp.text[:160]))
         return ok
     except Exception as e:
-        print("[africa_articles] Redis SET error (%s): %s" % (key, str(e)[:100]))
+        print("[africa_articles] Redis SET EXCEPTION (%s): %s: %s"
+              % (key, type(e).__name__, str(e)[:140]))
         return False
 
 
@@ -1041,6 +1051,6 @@ def register_africa_articles_endpoints(app, start_scheduler=True):
 # ============================================================
 # MODULE METADATA
 # ============================================================
-__version__   = '1.0.2'
+__version__   = '1.0.3'
 __module_id__ = 'africa_article_gatherer'
 print(f'[Africa Article Gatherer] Module loaded -- v{__version__}')

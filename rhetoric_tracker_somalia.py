@@ -593,7 +593,23 @@ def _redis_get(key):
 
 
 def _redis_set(key, value, ttl=RHETORIC_CACHE_TTL):
+    """Upstash REST SET (command-array to base URL).
+
+    v1.0.1 (Jul 23 2026) -- DIAGNOSTIC UPGRADE. Writes were failing silently:
+    the scan ran and returned data on ?force=true, but nothing persisted, so a
+    normal page load found an empty cache. The old version returned a bare
+    False with no reason. This logs the actual HTTP status + response body (and
+    catches the classic env-var trap: UPSTASH_REDIS_URL holding a redis://
+    connection string instead of the https:// REST URL, which makes
+    requests.post raise before it ever reaches Upstash).
+    """
     if not UPSTASH_REDIS_URL or not UPSTASH_REDIS_TOKEN:
+        print("[Somalia Rhetoric Redis] SET skipped -- URL or TOKEN not set")
+        return False
+    if not UPSTASH_REDIS_URL.startswith('http'):
+        print(f"[Somalia Rhetoric Redis] SET ABORT -- UPSTASH_REDIS_URL is not an "
+              f"https REST URL (starts with '{UPSTASH_REDIS_URL[:10]}...'). "
+              f"Upstash REST needs the https:// endpoint, not a redis:// string.")
         return False
     try:
         payload = ['SET', key, json.dumps(value, default=str)]
@@ -605,9 +621,14 @@ def _redis_set(key, value, ttl=RHETORIC_CACHE_TTL):
             json=payload,
             timeout=8,
         )
-        return resp.status_code == 200
+        if resp.status_code != 200:
+            print(f"[Somalia Rhetoric Redis] SET FAILED ({key}): "
+                  f"HTTP {resp.status_code} body={resp.text[:160]}")
+            return False
+        return True
     except Exception as e:
-        print(f"[Somalia Rhetoric Redis] SET error: {str(e)[:100]}")
+        print(f"[Somalia Rhetoric Redis] SET EXCEPTION ({key}): "
+              f"{type(e).__name__}: {str(e)[:140]}")
     return False
 
 
@@ -1528,7 +1549,79 @@ def register_somalia_rhetoric_routes(app, start_background=True):
         except Exception as e:
             return jsonify({'country': 'somalia', 'history': [], 'error': str(e)[:120]})
 
+    @app.route('/debug/redis-somalia', methods=['GET'])
+    def debug_redis_somalia():
+        """Definitive Redis round-trip test for the Africa backend.
+
+        Answers, in one call: is the URL a valid https REST endpoint? Does a
+        SET actually succeed (status + body)? Does a GET read it back? This
+        exists because writes were failing silently across every Africa module
+        while the humanitarian card still rendered (it falls back to a static
+        baseline, which masked the failure).
+        """
+        out = {
+            'module': 'rhetoric_tracker_somalia',
+            'url_set': bool(UPSTASH_REDIS_URL),
+            'token_set': bool(UPSTASH_REDIS_TOKEN),
+            'url_scheme': (UPSTASH_REDIS_URL.split('://')[0] + '://')
+                          if '://' in (UPSTASH_REDIS_URL or '') else 'MISSING/INVALID',
+            'url_is_https_rest': bool(UPSTASH_REDIS_URL
+                                      and UPSTASH_REDIS_URL.startswith('https')),
+            'url_host_masked': (UPSTASH_REDIS_URL.split('://')[-1][:18] + '...')
+                               if '://' in (UPSTASH_REDIS_URL or '') else None,
+            'token_len': len(UPSTASH_REDIS_TOKEN or ''),
+            'cache_key': RHETORIC_CACHE_KEY,
+        }
+        test_key = 'africa:debug:roundtrip'
+        test_val = {'ping': datetime.now(timezone.utc).isoformat()}
+
+        # 1) raw SET
+        try:
+            r = requests.post(
+                UPSTASH_REDIS_URL,
+                headers={"Authorization": f"Bearer {UPSTASH_REDIS_TOKEN}"},
+                json=['SET', test_key, json.dumps(test_val), 'EX', '120'],
+                timeout=8,
+            )
+            out['set_status'] = r.status_code
+            out['set_body'] = r.text[:200]
+            out['set_ok'] = (r.status_code == 200)
+        except Exception as e:
+            out['set_status'] = None
+            out['set_error'] = f"{type(e).__name__}: {str(e)[:160]}"
+            out['set_ok'] = False
+
+        # 2) raw GET back
+        try:
+            g = requests.get(
+                f"{UPSTASH_REDIS_URL}/get/{test_key}",
+                headers={"Authorization": f"Bearer {UPSTASH_REDIS_TOKEN}"},
+                timeout=8,
+            )
+            out['get_status'] = g.status_code
+            out['get_body'] = g.text[:200]
+            out['roundtrip_ok'] = (g.status_code == 200
+                                   and bool((g.json() or {}).get('result')))
+        except Exception as e:
+            out['get_status'] = None
+            out['get_error'] = f"{type(e).__name__}: {str(e)[:160]}"
+            out['roundtrip_ok'] = False
+
+        # 3) is the real rhetoric cache actually present?
+        out['rhetoric_cache_present'] = bool(_redis_get(RHETORIC_CACHE_KEY))
+        out['lastgood_present'] = bool(_redis_get(LASTGOOD_KEY))
+
+        out['verdict'] = (
+            'Redis round-trip OK -- caching should persist'
+            if out.get('roundtrip_ok') else
+            'Redis WRITE/READ FAILING -- see set_status/set_body/set_error above. '
+            'If url_is_https_rest is false, the env var holds a redis:// string '
+            'instead of the Upstash https REST URL. If set_status is 401, the '
+            'token is wrong or belongs to a different database.'
+        )
+        return jsonify(out)
+
     if start_background:
         _start_periodic_scan(interval_hours=12)
 
-    print("[Somalia Rhetoric] \u2705 Routes registered: /api/rhetoric/somalia (+/summary,/history)")
+    print("[Somalia Rhetoric] \u2705 Routes registered: /api/rhetoric/somalia (+/summary,/history,/debug/redis-somalia)")
