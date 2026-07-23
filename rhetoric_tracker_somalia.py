@@ -1426,8 +1426,22 @@ def run_somalia_rhetoric_scan(days=3):
         result['top_signals'] = []
 
     # ── Save cache + last-known-good ──
-    _redis_set(RHETORIC_CACHE_KEY, result)
-    _redis_set(LASTGOOD_KEY, result, ttl=LASTGOOD_TTL)
+    # v1.0.1 (Jul 23 2026): report the write outcome. Scans were returning data
+    # to the browser while the cache stayed empty, so a normal (non-force) load
+    # found nothing. Redis itself round-trips fine, so the failure is specific
+    # to THIS write -- surface it instead of discarding the return value.
+    _cache_bytes = len(json.dumps(result, default=str))
+    _wrote_cache = _redis_set(RHETORIC_CACHE_KEY, result)
+    _wrote_lg    = _redis_set(LASTGOOD_KEY, result, ttl=LASTGOOD_TTL)
+    print(f"[Somalia Rhetoric] Cache write: latest={_wrote_cache} "
+          f"lastgood={_wrote_lg} payload={_cache_bytes:,}B "
+          f"key={RHETORIC_CACHE_KEY}")
+    if not _wrote_cache:
+        print("[Somalia Rhetoric] \u26A0\uFE0F CACHE WRITE FAILED -- page will show "
+              "empty on non-force loads. See the SET FAILED line above for the "
+              "HTTP status/body.")
+    result['cache_written'] = bool(_wrote_cache)
+    result['cache_payload_bytes'] = _cache_bytes
 
     # ── History snapshot (lpush + ltrim 0/119) ──
     try:
@@ -1607,12 +1621,42 @@ def register_somalia_rhetoric_routes(app, start_background=True):
             out['get_error'] = f"{type(e).__name__}: {str(e)[:160]}"
             out['roundtrip_ok'] = False
 
-        # 3) is the real rhetoric cache actually present?
+        # 3) LARGE-payload test -- the small ping above proves Redis is healthy,
+        #    but the real rhetoric result is a big object. If big writes fail
+        #    where small ones succeed, that is the bug.
+        try:
+            big_val = {'blob': 'x' * 120000, 'note': 'large-payload write test'}
+            big_bytes = len(json.dumps(big_val))
+            rb = requests.post(
+                UPSTASH_REDIS_URL,
+                headers={"Authorization": f"Bearer {UPSTASH_REDIS_TOKEN}"},
+                json=['SET', 'africa:debug:bigblob', json.dumps(big_val), 'EX', '120'],
+                timeout=12,
+            )
+            out['large_write_bytes'] = big_bytes
+            out['large_write_status'] = rb.status_code
+            out['large_write_body'] = rb.text[:200]
+            out['large_write_ok'] = (rb.status_code == 200)
+        except Exception as e:
+            out['large_write_ok'] = False
+            out['large_write_error'] = f"{type(e).__name__}: {str(e)[:160]}"
+
+        # 4) is the real rhetoric cache actually present?
         out['rhetoric_cache_present'] = bool(_redis_get(RHETORIC_CACHE_KEY))
         out['lastgood_present'] = bool(_redis_get(LASTGOOD_KEY))
 
+        if out.get('roundtrip_ok') and not out.get('large_write_ok'):
+            out['verdict'] = ('SMALL writes succeed but LARGE writes FAIL -- the '
+                              'rhetoric result is too big for this Upstash plan/'
+                              'request limit. See large_write_status/body. Fix: '
+                              'trim the cached payload (drop full article bodies) '
+                              'or raise the Upstash limit.')
+            return jsonify(out)
+
         out['verdict'] = (
-            'Redis round-trip OK -- caching should persist'
+            'Redis round-trip OK (small AND large) -- if rhetoric_cache_present is '
+            'still false, run ?force=true and read the "[Somalia Rhetoric] Cache '
+            'write:" line in the Render log for the real reason'
             if out.get('roundtrip_ok') else
             'Redis WRITE/READ FAILING -- see set_status/set_body/set_error above. '
             'If url_is_https_rest is false, the env var holds a redis:// string '
