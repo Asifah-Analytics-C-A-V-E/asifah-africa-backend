@@ -623,7 +623,34 @@ def interpret_signals(scan_data):
 # does not have to infer it from keywords. Humanitarian-compound signals
 # carry pressure_type='humanitarian' for the same reason.
 
+def _tier(level, base):
+    """Priority + framing for a vector-driven signal, scaled by level.
+
+    THE LENS PRINCIPLE (Jul 24 2026): every layer DOWN gets a wider lens.
+    The country page shows everything this emits, including L2 "watch" signals
+    that would be noise at regional altitude. The Africa BLUF gates to L2+ (or
+    any diplomatic signal, which is a score REDUCER and would otherwise be
+    buried by an escalation-weighted sort). The GPI takes a narrower cut still.
+
+    `base` is the category's priority at L3. L2 drops it well below the
+    red-line band so the BLUF's priority sort naturally deprioritises watch-
+    tier signals without needing a second rule.
+    """
+    if level >= 4:
+        return base + 1, 'active'
+    if level == 3:
+        return base, 'elevated'
+    return max(base - 3, 4), 'watch'
+
+
 def build_top_signals(result):
+    """Emit the FULL signal pool. No caps here by design.
+
+    Consumers gate, producers state. The Africa BLUF applies the L2+/diplomatic
+    gate and its own per-theatre quota (MAX_PER_THEATRE); the GPI narrows again
+    above that. Capping at emission time would hide from the country page the
+    very texture the country page exists to show.
+    """
     signals  = []
     vectors  = result.get('vector_levels', {}) or {}
     compound = result.get('compound_convergence', {}) or {}
@@ -669,28 +696,33 @@ def build_top_signals(result):
                           'renegotiated rather than settled.'),
         })
 
-    # ── CATEGORY 3: RED LINES BREACHED ──
-    # Capped at the 3 most severe. The Africa BLUF pools only TOP_SIGNALS_COUNT
-    # (12) signals across ALL trackers, so an uncapped breach loop from a
-    # high-intensity theatre would crowd every other African country out of the
-    # regional read entirely. Sudan should dominate when it deserves to --
-    # it should not monopolise.
-    _breached = [r for r in rl_obj.get('triggered', [])
-                 if r.get('status') == 'BREACHED'
-                 and r.get('id') not in ('compound_risk', 'russia_contradiction')]
-    _breached.sort(key=lambda r: int(r.get('severity', 0) or 0), reverse=True)
-    for rl in _breached[:3]:
-        if True:
+    # ── CATEGORY 3: RED LINES BREACHED (uncapped — the page shows all) ──
+    for rl in rl_obj.get('triggered', []):
+        if rl.get('status') == 'BREACHED' and rl.get('id') not in ('compound_risk', 'russia_contradiction'):
             sev = int(rl.get('severity', 0) or 0)
             signals.append({
                 'priority': 12 if sev >= 3 else 11,
                 'category': 'red_line_breached',
                 'theatre': 'sudan',
-                'level': max(theatre_level, sev * 2),
+                'level': min(max(theatre_level, sev * 2), 5),   # clamp: 0-5 canonical palette
                 'icon': rl.get('icon', '\U0001F6A8'),
                 'color': '#dc2626',
                 'short_text': f'{SUDAN_FLAG} SUDAN: {rl.get("label", "Red line")[:58]}',
                 'long_text': f'SUDAN red line breached — {rl.get("label", "")}: {rl.get("detail", "")[:130]}',
+            })
+
+    # ── CATEGORY 3b: RED LINES APPROACHING (watch tier — country page only) ──
+    for rl in rl_obj.get('triggered', []):
+        if rl.get('status') == 'APPROACHING':
+            signals.append({
+                'priority': 7,
+                'category': 'red_line_approaching',
+                'theatre': 'sudan',
+                'level': 3,
+                'icon': rl.get('icon', '\u26A0\uFE0F'),
+                'color': '#f59e0b',
+                'short_text': f'{SUDAN_FLAG} SUDAN: Approaching — {rl.get("label", "")[:46]}',
+                'long_text': f'SUDAN red line approaching — {rl.get("label", "")}: {rl.get("trigger", "")[:120]}',
             })
 
     # ── CATEGORY 4: CLAIMING-ACTOR SILENCE (mode='actor') ──
@@ -711,115 +743,155 @@ def build_top_signals(result):
                               f'security ahead of activity — not de-escalation.'),
             })
 
-    # ── CATEGORY 5: KINETIC TEMPO ──
-    if vectors.get('kinetic', 0) >= 4:
+    # ── CATEGORY 5: KINETIC TEMPO (L2+) ──
+    kin = vectors.get('kinetic', 0)
+    if kin >= 2:
+        pri, frame = _tier(kin, 10)
+        detail = {
+            'active': ('The El Obeid siege line is the current decisive frontline; El Fasher '
+                       '(Oct 2025) established the siege-to-fall-to-atrocity sequence.'),
+            'elevated': ('Massing, threat framing, or direct escalation language present '
+                         'across the SAF-RSF axis.'),
+            'watch': ('Positional clashes and routine communiqué traffic — baseline war tempo '
+                      'for a conflict in its third year, logged rather than flagged.'),
+        }[frame]
         signals.append({
-            'priority': 11,
+            'priority': pri if kin >= 4 else pri,
             'category': 'kinetic_tempo',
             'theatre': 'sudan',
-            'level': vectors.get('kinetic', 0),
-            'icon': '\U0001F6A8',
-            'color': '#dc2626',
+            'level': kin,
+            'icon': '\U0001F6A8' if kin >= 4 else '\u2694\uFE0F',
+            'color': '#dc2626' if kin >= 4 else ('#f97316' if kin == 3 else '#f59e0b'),
             'pressure_type': 'kinetic',
-            'short_text': f'{SUDAN_FLAG} SUDAN: War tempo L{vectors.get("kinetic",0)} (Kordofan axis)',
-            'long_text': ('SUDAN: SAF-RSF kinetic tempo elevated. The El Obeid siege line is '
-                          'the current decisive frontline; El Fasher (Oct 2025) established '
-                          'the siege-to-fall-to-atrocity sequence.'),
+            'short_text': f'{SUDAN_FLAG} SUDAN: War tempo L{kin} ({frame})',
+            'long_text': f'SUDAN: SAF-RSF kinetic tempo {frame}. {detail}',
         })
 
-    # ── CATEGORY 6: RUSSIA PLUG (rides up even if lone — the wheel spoke) ──
-    if vectors.get('russia_plug', 0) >= 3:
+    # ── CATEGORY 6: RUSSIA PLUG (L2+ — the wheel spoke, rides up even if lone) ──
+    rp = vectors.get('russia_plug', 0)
+    if rp >= 2:
+        pri, frame = _tier(rp, 10)
+        detail = ('Following the loss of Tartus, Red Sea basing likely indicates Africa Corps '
+                  'supply-chain necessity — the Russia wheel\'s newest spoke.') if rp >= 3 else \
+                 ('Reporting-level references to Russian interest at Port Sudan. Logged as '
+                  'wheel-spoke baseline; the plug is present but not moving this cycle.')
         signals.append({
-            'priority': 10,
+            'priority': pri,
             'category': 'russia_plug',
             'theatre': 'sudan',
-            'level': vectors.get('russia_plug', 0),
+            'level': rp,
             'icon': '\u2693',
-            'color': '#dc2626',
-            'short_text': f'{SUDAN_FLAG} SUDAN: Russia Port Sudan plug L{vectors.get("russia_plug",0)}',
-            'long_text': ('SUDAN: Russian naval/arms/mining activity at Port Sudan. Following '
-                          'the loss of Tartus, Red Sea basing likely indicates Africa Corps '
-                          'supply-chain necessity — the Russia wheel\'s newest spoke.'),
+            'color': '#dc2626' if rp >= 4 else ('#f97316' if rp == 3 else '#f59e0b'),
+            'short_text': f'{SUDAN_FLAG} SUDAN: Russia Port Sudan plug L{rp} ({frame})',
+            'long_text': f'SUDAN: Russian naval/arms/mining activity at Port Sudan {frame}. {detail}',
         })
 
-    # ── CATEGORY 7: PATRON AXIS ──
-    if vectors.get('uae_axis', 0) >= 3 or vectors.get('saf_patron', 0) >= 3:
-        named = [k.upper() if k == 'ksa' else k.title() for k, v in subtags.items() if v >= 3]
+    # ── CATEGORY 7: PATRON AXIS (L2+) ──
+    uae = vectors.get('uae_axis', 0)
+    safp = vectors.get('saf_patron', 0)
+    if max(uae, safp) >= 2:
+        lvl = max(uae, safp)
+        pri, frame = _tier(lvl, 9)
+        named = [k.upper() if k == 'ksa' else k.title() for k, v in subtags.items() if v >= 2]
         named_txt = f' ({", ".join(named)})' if named else ''
-        lvl = max(vectors.get('uae_axis', 0), vectors.get('saf_patron', 0))
         signals.append({
-            'priority': 9,
+            'priority': pri,
             'category': 'patron_axis',
             'theatre': 'sudan',
             'level': lvl,
             'icon': '\U0001F30D',
-            'color': '#f97316',
-            'short_text': f'{SUDAN_FLAG} SUDAN: Patron axis L{lvl}{named_txt[:24]}',
-            'long_text': (f'SUDAN: External patron activity elevated{named_txt} — UAE-attributed '
+            'color': '#f97316' if lvl >= 3 else '#f59e0b',
+            'short_text': f'{SUDAN_FLAG} SUDAN: Patron axis L{lvl}{named_txt[:22]}',
+            'long_text': (f'SUDAN: External patron activity {frame}{named_txt} — UAE-attributed '
                           f'RSF support and/or the SAF patron composite. Measured as reporting '
                           f'and attribution tempo: sensor, not referee.'),
         })
 
-    # ── CATEGORY 8: SPILLOVER CORRIDORS ──
-    if vectors.get('spillover_south', 0) >= 3:
+    # ── CATEGORY 8: SPILLOVER CORRIDORS (L2+) ──
+    ss = vectors.get('spillover_south', 0)
+    if ss >= 2:
+        pri, frame = _tier(ss, 10)
         signals.append({
-            'priority': 10,
+            'priority': pri,
             'category': 'spillover_south',
             'theatre': 'sudan',
-            'level': vectors.get('spillover_south', 0),
+            'level': ss,
             'icon': '\U0001F6E2\uFE0F',
-            'color': '#dc2626',
-            'short_text': f'{SUDAN_FLAG} SUDAN: South Sudan corridor L{vectors.get("spillover_south",0)}',
-            'long_text': ('SUDAN: Blue Nile / SPLM-N / Petrodar corridor active. South Sudan '
+            'color': '#dc2626' if ss >= 4 else ('#f97316' if ss == 3 else '#f59e0b'),
+            'short_text': f'{SUDAN_FLAG} SUDAN: South Sudan corridor L{ss} ({frame})',
+            'long_text': ('SUDAN: Blue Nile / SPLM-N / Petrodar corridor %s. South Sudan '
                           'draws most state revenue through a pipeline crossing Sudanese '
-                          'territory — corridor activity couples the two states\' stability.'),
+                          'territory — corridor activity couples the two states\' stability.' % frame),
         })
-    if vectors.get('spillover_west', 0) >= 3:
+    sw = vectors.get('spillover_west', 0)
+    if sw >= 2:
+        pri, frame = _tier(sw, 9)
         signals.append({
-            'priority': 9,
+            'priority': pri,
             'category': 'spillover_west',
             'theatre': 'sudan',
-            'level': vectors.get('spillover_west', 0),
+            'level': sw,
             'icon': '\u26A0\uFE0F',
-            'color': '#f97316',
-            'short_text': f'{SUDAN_FLAG} SUDAN: Chad-border corridor L{vectors.get("spillover_west",0)}',
-            'long_text': ('SUDAN: Chad-border activity elevated. Chad hosts both the largest '
+            'color': '#dc2626' if sw >= 4 else ('#f97316' if sw == 3 else '#f59e0b'),
+            'short_text': f'{SUDAN_FLAG} SUDAN: Chad-border corridor L{sw} ({frame})',
+            'long_text': ('SUDAN: Chad-border activity %s. Chad hosts both the largest '
                           'refugee population and the alleged RSF resupply route — inseparable '
-                          'functions that make incidents there consistent with regionalization.'),
+                          'functions that make incidents there consistent with regionalization.' % frame),
         })
 
-    # ── CATEGORY 9: PEACE TRACK (DIPLOMATIC — native pressure_type tag) ──
-    if vectors.get('peace_track', 0) >= 3:
+    # ── CATEGORY 8b: LIBYA-HAFTAR standalone (L2+) ──
+    lh = vectors.get('libya_haftar', 0)
+    if lh >= 2 and not compound.get('russia_contradiction_active'):
+        pri, frame = _tier(lh, 8)
         signals.append({
-            'priority': 9,
+            'priority': pri,
+            'category': 'libya_haftar',
+            'theatre': 'sudan',
+            'level': lh,
+            'icon': '\u2696\uFE0F',
+            'color': '#f97316' if lh >= 3 else '#f59e0b',
+            'short_text': f'{SUDAN_FLAG} SUDAN: Libya-Haftar supply node L{lh} ({frame})',
+            'long_text': ('SUDAN: Haftar/LNA-to-RSF supply reporting %s. Watched as the second '
+                          'half of the Russia two-plug question — this node contradicts the '
+                          'Port Sudan state-level track when both run hot.' % frame),
+        })
+
+    # ── CATEGORY 9: PEACE TRACK (L2+, DIPLOMATIC — native pressure_type) ──
+    # NOTE: pressure_type='diplomatic' is load-bearing. Diplomatic signals are
+    # score REDUCERS, so an escalation-weighted priority sort buries them at
+    # every altitude. The Africa BLUF and the GPI both use this tag to
+    # guarantee de-escalation surfaces. Never emit this signal without it.
+    pt_lvl = vectors.get('peace_track', 0)
+    if pt_lvl >= 2:
+        pri, frame = _tier(pt_lvl, 9)
+        detail = ('Reported beside the kinetic read, not netted against it — an active track '
+                  'has historically coexisted with offensive tempo in Sudan.') if pt_lvl >= 3 else \
+                 ('Mediation referenced but not convened this cycle. Logged so the off-ramp '
+                  'stays observable rather than assumed absent.')
+        signals.append({
+            'priority': pri,
             'category': 'diplomatic_offramp',
             'theatre': 'sudan',
-            'level': vectors.get('peace_track', 0),
+            'level': pt_lvl,
             'icon': '\U0001F54A\uFE0F',
             'color': '#1d4ed8',
             'pressure_type': 'diplomatic',
-            'short_text': f'{SUDAN_FLAG} SUDAN: Mediation track active L{vectors.get("peace_track",0)}',
-            'long_text': ('SUDAN: Boulos/Quad mediation cadence elevated. Reported beside the '
-                          'kinetic read, not netted against it — an active track has '
-                          'historically coexisted with offensive tempo in Sudan.'),
+            'short_text': f'{SUDAN_FLAG} SUDAN: Mediation track L{pt_lvl} ({frame})',
+            'long_text': f'SUDAN: Boulos/Quad mediation cadence {frame}. {detail}',
         })
 
     # ── CATEGORY 10: THEATRE HIGH (fallback) ──
-    if not signals and theatre_level >= 3:
+    if not signals and theatre_level >= 2:
         signals.append({
-            'priority': 7,
+            'priority': 6,
             'category': 'theatre_high',
             'theatre': 'sudan',
             'level': theatre_level,
             'icon': SUDAN_FLAG,
-            'color': '#f97316',
-            'short_text': f'{SUDAN_FLAG} SUDAN: Elevated pressure L{theatre_level}',
+            'color': '#f59e0b',
+            'short_text': f'{SUDAN_FLAG} SUDAN: Pressure L{theatre_level}',
             'long_text': f'SUDAN: Theatre pressure at L{theatre_level}. See tracker for vector detail.',
         })
 
-    signals.sort(key=lambda s: s['priority'], reverse=True)
-
-    # Total emission cap. Same reasoning as the breach cap above: the regional
-    # BLUF pools 12 signals across every Africa tracker. Eight is enough for
-    # Sudan to lead the regional read on merit without silencing its neighbours.
-    return signals[:8]
+    signals.sort(key=lambda s: (-s['priority'], -s.get('level', 0)))
+    return signals
