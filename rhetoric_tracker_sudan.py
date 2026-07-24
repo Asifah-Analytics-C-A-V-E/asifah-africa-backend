@@ -360,23 +360,28 @@ KINETIC_TRIGGERS = {
         'kadugli under siege', 'dilling shelled',
         'rsf assault', 'saf air raid', 'sudan drone attack',
         'sudan army advance', 'rsf advance',
-        # Arabic
-        '\u063a\u0627\u0631\u0629 \u062c\u0648\u064a\u0629',       # غارة جوية "airstrike"
-        '\u0642\u0635\u0641 \u0627\u0644\u0623\u0628\u064a\u0636',  # قصف الأبيض
+        # Arabic -- confirmed strike / casualties / advance
+        '\u063a\u0627\u0631\u0629 \u062c\u0648\u064a\u0629', '\u0642\u0635\u0641 \u0627\u0644\u0623\u0628\u064a\u0636', '\u0645\u0642\u062a\u0644', '\u0642\u062a\u0644\u0649', '\u062c\u0631\u062d\u0649', '\u0642\u0635\u0641', '\u063a\u0627\u0631\u0629', '\u0647\u062c\u0645\u0627\u062a', '\u0647\u062c\u0648\u0645', '\u062a\u0642\u062f\u0645 \u0645\u064a\u062f\u0627\u0646\u064a', '\u062e\u0633\u0627\u0626\u0631 \u0643\u0628\u064a\u0631\u0629', '\u0637\u0627\u0626\u0631\u0629 \u0645\u0633\u064a\u0631\u0629', '\u0645\u0633\u064a\u0631\u0627\u062a', '\u0627\u0633\u062a\u0647\u062f\u0627\u0641',
     ],
     3: [  # Confrontation — massing / threats / direct escalation language
         'saf massing kordofan', 'rsf reinforcements', 'rsf mobilizing',
         'saf preparing offensive', 'sudan escalation',
         'burhan warns', 'hemedti threatens', 'burhan vows',
         'sudan battle for', 'clash intensifies sudan',
+        # Arabic -- threat framing / massing / defection
+        '\u064a\u062a\u0639\u0647\u062f', '\u064a\u062a\u0648\u0639\u062f', '\u062f\u062d\u0631', '\u062d\u0634\u062f', '\u062a\u0639\u0632\u064a\u0632\u0627\u062a', '\u062a\u0635\u0639\u064a\u062f', '\u0645\u0639\u0631\u0643\u0629', '\u0627\u0646\u0634\u0642\u0627\u0642', '\u0645\u0646\u0634\u0642',
     ],
     2: [  # Tension — activity uptick, propaganda, positional
         'sudan clashes', 'sudan fighting continues', 'sudan army briefing',
         'rsf statement', 'saf statement', 'sudan skirmish',
         'sudan frontline', 'sudan frontlines',
+        # Arabic
+        '\u0627\u0634\u062a\u0628\u0627\u0643\u0627\u062a', '\u0645\u0648\u0627\u062c\u0647\u0627\u062a', '\u062c\u0628\u0647\u0629', '\u0628\u064a\u0627\u0646 \u0639\u0633\u0643\u0631\u064a',
     ],
     1: [  # Rhetoric — baseline mention
         'sudan war', 'sudan conflict', 'sudan civil war',
+        # Arabic
+        '\u0627\u0644\u062d\u0631\u0628 \u0641\u064a \u0627\u0644\u0633\u0648\u062f\u0627\u0646', '\u0627\u0644\u0646\u0632\u0627\u0639 \u0627\u0644\u0633\u0648\u062f\u0627\u0646\u064a',
     ],
 }
 
@@ -409,6 +414,8 @@ RUSSIA_PLUG_TRIGGERS = {
     ],
     1: [
         'russia sudan', 'moscow sudan', 'africa corps sudan',
+        # Arabic
+        '\u0631\u0648\u0633\u064a\u0627 \u0627\u0644\u0633\u0648\u062f\u0627\u0646', '\u0645\u0648\u0633\u0643\u0648', '\u0641\u064a\u0644\u0642 \u0623\u0641\u0631\u064a\u0642\u064a\u0627', '\u0641\u0627\u063a\u0646\u0631', '\u0642\u0627\u0639\u062f\u0629 \u0628\u062d\u0631\u064a\u0629',
     ],
 }
 
@@ -427,6 +434,8 @@ UAE_AXIS_TRIGGERS = {
     3: [
         'uae rsf allegations', 'uae denies rsf', 'saf accuses uae',
         'uae sudan diplomatic dispute', 'uae abu dhabi rsf',
+        # Arabic -- attribution / protest tempo
+        '\u062f\u0639\u0645 \u0625\u0645\u0627\u0631\u0627\u062a\u064a', '\u0623\u0633\u0644\u062d\u0629 \u0625\u0645\u0627\u0631\u0627\u062a\u064a\u0629', '\u0627\u0644\u062e\u0631\u0637\u0648\u0645 \u062a\u062d\u062a\u062c',
     ],
     2: [
         'uae sudan denial', 'uae humanitarian sudan', 'uae mediation sudan',
@@ -434,6 +443,8 @@ UAE_AXIS_TRIGGERS = {
     ],
     1: [
         'uae sudan', 'emirates sudan', 'abu dhabi sudan',
+        # Arabic
+        '\u0627\u0644\u0625\u0645\u0627\u0631\u0627\u062a', '\u0623\u0628\u0648\u0638\u0628\u064a',
     ],
 }
 
@@ -464,6 +475,8 @@ SAF_PATRON_TRIGGERS = {
     ],
     1: [
         'egypt sudan', 'saudi sudan', 'iran sudan', 'turkey sudan',
+        # Arabic
+        '\u0645\u0635\u0631', '\u0627\u0644\u0642\u0627\u0647\u0631\u0629', '\u0627\u0644\u0633\u0639\u0648\u062f\u064a\u0629', '\u0625\u064a\u0631\u0627\u0646', '\u062a\u0631\u0643\u064a\u0627', '\u0623\u0646\u0642\u0631\u0629',
     ],
 }
 
@@ -491,6 +504,8 @@ PEACE_TRACK_TRIGGERS = {
     ],
     1: [
         'sudan peace', 'sudan negotiations', 'sudan mediation',
+        # Arabic
+        '\u0645\u0641\u0627\u0648\u0636\u0627\u062a', '\u0648\u0633\u0627\u0637\u0629', '\u0645\u0628\u0627\u062d\u062b\u0627\u062a', '\u0645\u0628\u0639\u0648\u062b', '\u0648\u0642\u0641 \u0625\u0637\u0644\u0627\u0642 \u0627\u0644\u0646\u0627\u0631', '\u0647\u062f\u0646\u0629',
     ],
 }
 
@@ -516,6 +531,8 @@ SPILLOVER_SOUTH_TRIGGERS = {
     ],
     1: [
         'blue nile sudan', 'splm-n', 'petrodar',
+        # Arabic
+        '\u0627\u0644\u0646\u064a\u0644 \u0627\u0644\u0623\u0632\u0631\u0642', '\u062c\u0646\u0648\u0628 \u0627\u0644\u0633\u0648\u062f\u0627\u0646', '\u0627\u0644\u062d\u0644\u0648', '\u0623\u0628\u064a\u064a', '\u0647\u062c\u0644\u064a\u062c',
     ],
 }
 
@@ -539,6 +556,8 @@ SPILLOVER_WEST_TRIGGERS = {
     ],
     1: [
         'chad sudan', 'zaghawa',
+        # Arabic
+        '\u062a\u0634\u0627\u062f', '\u0627\u0644\u0632\u063a\u0627\u0648\u0629', '\u0644\u0627\u062c\u0626\u064a\u0646 \u0633\u0648\u062f\u0627\u0646\u064a\u064a\u0646',
     ],
 }
 
@@ -561,6 +580,8 @@ LIBYA_HAFTAR_TRIGGERS = {
     ],
     1: [
         'libya sudan', 'haftar',
+        # Arabic
+        '\u062d\u0641\u062a\u0631', '\u0644\u064a\u0628\u064a\u0627', '\u0637\u0628\u0631\u0642', '\u0628\u0646\u063a\u0627\u0632\u064a',
     ],
 }
 
@@ -601,6 +622,9 @@ SPECIFIC_GEOGRAPHIES = [
     # Assets / infrastructure
     'petrodar pipeline', 'port sudan port', 'khartoum airport',
     'nyala airport', 'wadi seidna base', 'meroe',
+    # Arabic place names -- the corpus is majority Arabic, so an English-only
+    # geography list scored every Arabic headline at specificity 0.
+    '\u0627\u0644\u062e\u0631\u0637\u0648\u0645', '\u0623\u0645 \u062f\u0631\u0645\u0627\u0646', '\u0628\u0648\u0631\u062a\u0633\u0648\u062f\u0627\u0646', '\u0648\u062f \u0645\u062f\u0646\u064a', '\u0633\u0646\u0627\u0631', '\u0643\u0648\u0633\u062a\u064a', '\u0627\u0644\u0641\u0627\u0634\u0631', '\u0646\u064a\u0627\u0644\u0627', '\u0627\u0644\u062c\u0646\u064a\u0646\u0629', '\u0627\u0644\u0623\u0628\u064a\u0636', '\u0643\u0627\u062f\u0642\u0644\u064a', '\u0627\u0644\u062f\u0644\u0646\u062c', '\u0639\u0637\u0628\u0631\u0629', '\u0643\u0633\u0644\u0627', '\u0627\u0644\u0642\u0636\u0627\u0631\u0641', '\u0627\u0644\u062f\u0645\u0627\u0632\u064a\u0646', '\u0643\u0631\u062f\u0641\u0627\u0646', '\u0634\u0645\u0627\u0644 \u0643\u0631\u062f\u0641\u0627\u0646', '\u062c\u0646\u0648\u0628 \u0643\u0631\u062f\u0641\u0627\u0646', '\u062f\u0627\u0631\u0641\u0648\u0631', '\u0627\u0644\u0646\u064a\u0644 \u0627\u0644\u0623\u0632\u0631\u0642', '\u0627\u0644\u062c\u0632\u064a\u0631\u0629', '\u0632\u0645\u0632\u0645', '\u0623\u0628\u0648 \u0634\u0648\u0643', '\u0632\u0627\u0644\u0646\u062c\u064a',
 ]
 
 SPECIFIC_ASSETS = [
@@ -1534,20 +1558,37 @@ def _write_crosstheater_signal(result, theatre_summary, humanitarian_read,
         return {'compound_risk_active': False, 'russia_contradiction_active': False, 'notes': []}
 
 
-def _detect_crosstheater_coordination():
-    """Read sibling hub fingerprints and flag if the Sudan reads sit alongside
-    active hub postures elsewhere (Russia hub especially). Surface-only; the
-    GPI synthesizes globally."""
+def _detect_crosstheater_coordination(sudan_plug_level=0):
+    """Read sibling hub fingerprints and flag how the Sudan reads sit alongside
+    active hub postures elsewhere. Surface-only; the GPI synthesizes globally.
+
+    ABSENCE-HONEST (fixed Jul 24 2026): the earlier version asserted 'while
+    Sudan russia_plug is active' whenever the Russia hub was elevated -- without
+    checking Sudan's own plug. It therefore claimed a convergence on cycles
+    where Sudan read L0, which is exactly the manufactured signal the doctrine
+    forbids. The note now states which of the two is actually live.
+    """
     try:
         signals = []
         russia_fp = _redis_get(RUSSIA_HUB_KEY)
         if russia_fp and isinstance(russia_fp, dict):
-            if russia_fp.get('level', 0) >= 3:
+            hub_level = russia_fp.get('level', 0)
+            if hub_level >= 3:
+                if sudan_plug_level >= 3:
+                    note = ('Russia hub elevated globally AND the Sudan Port Sudan plug is '
+                            'active in the same cycle -- consistent with Port Sudan becoming '
+                            'the new supply-chain spine.')
+                else:
+                    note = ('Russia hub elevated globally, but the Sudan Port Sudan plug is '
+                            'quiet this cycle (L%d). Hub posture without a local plug read is '
+                            'context, not convergence -- the Sudan spoke is not currently '
+                            'carrying it.' % sudan_plug_level)
                 signals.append({
                     'hub': 'russia',
-                    'note': 'Russia hub elevated globally while Sudan russia_plug is active '
-                            '-- consistent with Port Sudan hub becoming the new supply-chain spine.',
-                    'hub_level': russia_fp.get('level', 0),
+                    'note': note,
+                    'hub_level': hub_level,
+                    'sudan_plug_level': sudan_plug_level,
+                    'converged': sudan_plug_level >= 3,
                 })
         # (Future: read crosstheater:uae:fingerprint / crosstheater:egypt:fingerprint
         # if / when those hubs get formalised.)
@@ -1752,7 +1793,7 @@ def run_sudan_rhetoric_scan(days=3):
         result, theatre_summary, humanitarian_read, commodity_read,
         russia_hub_read, compound_preview)
     result['compound_convergence'] = compound
-    result['crosstheater_coordination'] = _detect_crosstheater_coordination()
+    result['crosstheater_coordination'] = _detect_crosstheater_coordination(max_russia_plug)
 
     print(f"[Sudan Rhetoric] \u2705 Scan complete — score {rhetoric_score}, "
           f"L{theatre_escalation_level} ({result['theatre_label']}), "
