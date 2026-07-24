@@ -1826,15 +1826,28 @@ def register_sudan_rhetoric_endpoints(app):
 
     @app.route('/api/rhetoric/sudan/summary', methods=['GET'])
     def sudan_rhetoric_summary():
+        """Lightweight read for the stability-page banner + top-signals card.
+
+        Carries top_signals, vector_levels, and the so_what prose so the
+        stability page can render a real Gold Standard rhetoric card without
+        pulling the full payload (which includes every actor's article list).
+        """
         cached = _redis_get(RHETORIC_CACHE_KEY) or _redis_get(LASTGOOD_KEY) or {}
+        _interp = cached.get('interpretation', {}) or {}
+        _rl = _interp.get('red_lines', {}) or {}
         return jsonify({
             'country': 'sudan',
             'rhetoric_score': cached.get('rhetoric_score', 0),
             'theatre_escalation_level': cached.get('theatre_escalation_level', 0),
             'theatre_label': cached.get('theatre_label', 'Unknown'),
+            'vector_levels': cached.get('vector_levels', {}),
             'compound_convergence': cached.get('compound_convergence', {}),
             'silence_anomalies': cached.get('silence_anomalies', []),
+            'top_signals': cached.get('top_signals', []),
+            'so_what': _interp.get('so_what', {}),
+            'red_lines_breached': _rl.get('breached_count', 0),
             'scan_date': cached.get('scan_date', ''),
+            'stale': bool(cached.get('stale')),
         })
 
     @app.route('/api/rhetoric/sudan/history', methods=['GET'])
