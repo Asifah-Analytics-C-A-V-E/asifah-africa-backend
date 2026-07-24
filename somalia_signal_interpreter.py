@@ -440,7 +440,11 @@ def build_top_signals(result):
                 'priority': 12 if sev >= 3 else 11,
                 'category': 'red_line_breached',
                 'theatre': 'somalia',
-                'level': max(theatre_level, sev * 2),
+                # Clamp to the 0-5 canonical palette. severity 3 -> sev*2 = 6,
+                # which is off-scale: it renders as 'L6 Red-Line Breach' on the
+                # Africa BLUF and, being the highest number in the pool, sets the
+                # GPI's global KINETIC axis to an impossible L6.
+                'level': min(max(theatre_level, sev * 2), 5),
                 'icon': rl.get('icon', '\U0001F6A8'),
                 'color': '#dc2626',
                 'short_text': f'{SOMALIA_FLAG} SOMALIA: {rl.get("label", "Red line")[:58]}',
