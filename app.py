@@ -121,6 +121,14 @@ except ImportError as e:
     print(f"[Africa] ⚠️ somalia_humanitarian not available: {e}")
 
 try:
+    from sudan_humanitarian import register_sudan_humanitarian_endpoints
+    SUDAN_HUMANITARIAN_AVAILABLE = True
+    print("[Africa] ✅ sudan_humanitarian loaded")
+except ImportError as e:
+    SUDAN_HUMANITARIAN_AVAILABLE = False
+    print(f"[Africa] ⚠️ sudan_humanitarian not available: {e}")
+
+try:
     from rhetoric_tracker_somalia import register_somalia_rhetoric_routes
     SOMALIA_RHETORIC_AVAILABLE = True
     print("[Africa] ✅ rhetoric_tracker_somalia loaded")
@@ -2410,6 +2418,12 @@ if SOMALIA_HUMANITARIAN_AVAILABLE:
         register_somalia_humanitarian_endpoints(app)
     except Exception as e:
         print(f'[Africa] ⚠️ Somalia humanitarian registration failed: {e}')
+
+if SUDAN_HUMANITARIAN_AVAILABLE:
+    try:
+        register_sudan_humanitarian_endpoints(app)
+    except Exception as e:
+        print(f'[Africa] ⚠️ Sudan humanitarian registration failed: {e}')
 
 if SOMALIA_RHETORIC_AVAILABLE:
     try:
