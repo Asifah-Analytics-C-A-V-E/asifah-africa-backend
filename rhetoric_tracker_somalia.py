@@ -1322,36 +1322,105 @@ def _write_crosstheater_signal(result, theatre_summary):
         return {'converged': False, 'active_wheels': [], 'wheel_count': 0}
 
 
+def _read_hub_fingerprint(hub):
+    """Resolve a hub's fingerprint across the THREE naming conventions in use.
+
+    Fixed Jul 24 2026. This function previously read only
+    `crosstheater:{hub}:fingerprint` -- which NOBODY writes for Turkey. Turkey
+    emits into the collective dict (`rhetoric:crosstheater:fingerprints`) plus
+    per-vector `fingerprint:turkey:{key}` entries. The result: Somalia's
+    Turkey-hub read returned empty on every scan since the tracker was built,
+    while TURKSOM is the whole reason Somalia was built first. Not a wrong
+    answer -- a question never asked.
+
+    Resolution order (first hit wins):
+      1. crosstheater:{hub}:fingerprint   -- canonical (Russia writes this)
+      2. rhetoric:crosstheater:fingerprints[hub] -- collective dict (Turkey)
+      3. fingerprint:{hub}:level          -- legacy per-vector
+
+    Returns (fingerprint_dict_or_None, source_label).
+    """
+    fp = _redis_get(f'crosstheater:{hub}:fingerprint')
+    if isinstance(fp, dict) and fp:
+        return fp, 'canonical'
+    collective = _redis_get(COLLECTIVE_KEY)
+    if isinstance(collective, dict):
+        slice_ = collective.get(hub)
+        if isinstance(slice_, dict) and slice_:
+            return slice_, 'collective'
+    fp = _redis_get(f'fingerprint:{hub}:level')
+    if isinstance(fp, dict) and fp:
+        return fp, 'legacy'
+    return None, 'absent'
+
+
+def _safe_hub_level(fp):
+    """Coerce a hub level across schemas. Turkey's collective slice maps
+    alert->1-4; canonical fingerprints use the 0-5 ladder. Falls back to
+    alert_level strings when no numeric level is present."""
+    try:
+        lvl = fp.get('level')
+        if isinstance(lvl, (int, float)):
+            return int(lvl)
+        alert = str(fp.get('alert_level') or fp.get('alert') or '').lower()
+        return {'normal': 1, 'elevated': 2, 'high': 3, 'critical': 4}.get(alert, 0)
+    except Exception:
+        return 0
+
+
 def _detect_crosstheater_coordination():
     """Read sibling hub fingerprints and flag if Somalia's junction wheels are
     ALSO lit elsewhere (e.g. Turkey firing in ME + Africa simultaneously).
-    Surface-only; the GPI synthesizes globally."""
-    try:
-        signals = []
-        # Turkey global read
-        turkey_fp = _redis_get('crosstheater:turkey:fingerprint')
-        if turkey_fp and isinstance(turkey_fp, dict):
-            if turkey_fp.get('level', 0) >= 3:
+    Surface-only; the GPI synthesizes globally.
+
+    Absence-honest: a hub that cannot be read is reported as unreadable, not as
+    quiet. Those are different facts and only one of them is a finding."""
+    signals = []
+    for hub, note_tpl in (
+        ('turkey', 'Turkey hub elevated globally while the Somalia Turkey-spoke is active '
+                   '-- consistent with coordinated ME->Africa projection.'),
+        ('russia', 'Russia hub elevated globally; Somalia Horn ambition reads as one rim '
+                   'of a wider posture.'),
+    ):
+        try:
+            fp, source = _read_hub_fingerprint(hub)
+            if fp is None:
                 signals.append({
-                    'hub': 'turkey',
-                    'note': 'Turkey hub elevated globally while Somalia Turkey-spoke active '
-                            '— consistent with coordinated ME->Africa projection',
-                    'hub_level': turkey_fp.get('level', 0),
+                    'hub': hub,
+                    'readable': False,
+                    'note': f'{hub.title()} hub fingerprint not readable this cycle '
+                            f'(no canonical, collective, or legacy key). Treated as '
+                            f'UNREADABLE, not quiet.',
                 })
-        # Russia global read
-        russia_fp = _redis_get('crosstheater:russia:fingerprint')
-        if russia_fp and isinstance(russia_fp, dict):
-            if russia_fp.get('level', 0) >= 3:
+                continue
+
+            level = _safe_hub_level(fp)
+
+            # Turkey publishes an explicit Erdogan Projection Node listing the
+            # theatres it is lit in. When present that is a direct, authoritative
+            # answer to "is this hub active HERE" -- far better than inferring
+            # from a global level.
+            lit = [str(x).lower() for x in (fp.get('projection_lit_theaters') or [])]
+            here = 'somalia' in lit or 'horn' in lit or 'africa' in lit
+
+            if here:
                 signals.append({
-                    'hub': 'russia',
-                    'note': 'Russia hub elevated globally; Somalia Horn ambition reads as '
-                            'one rim of a wider posture',
-                    'hub_level': russia_fp.get('level', 0),
+                    'hub': hub, 'readable': True, 'hub_level': level, 'source': source,
+                    'lit_here': True,
+                    'projection_band': fp.get('projection_band', ''),
+                    'note': f'{hub.title()} names Somalia among its lit theatres '
+                            f'(projection band: {fp.get("projection_band", "n/a")}). '
+                            f'Hub-declared presence, not inferred -- the strongest form '
+                            f'of this read.',
                 })
-        return signals
-    except Exception as e:
-        print(f"[Somalia Rhetoric] Coordination detect error: {str(e)[:80]}")
-        return []
+            elif level >= 3:
+                signals.append({
+                    'hub': hub, 'readable': True, 'hub_level': level, 'source': source,
+                    'lit_here': False, 'note': note_tpl,
+                })
+        except Exception as e:
+            print(f"[Somalia Rhetoric] Coordination detect error ({hub}): {str(e)[:80]}")
+    return signals
 
 
 # ============================================
