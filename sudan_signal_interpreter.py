@@ -58,6 +58,8 @@ RED_LINES = [
         'icon':     '\U0001F6A8',
         'category': 'kinetic_trigger',
         'vectors':  ['kinetic'],
+        # A city falling is an EVENT, not a tempo level. Requires its own phrase.
+        'event_keywords': ['el obeid falls', 'el obeid overrun', '\u0633\u0642\u0648\u0637 \u0627\u0644\u0623\u0628\u064a\u0636', '\u0643\u0631\u062f\u0641\u0627\u0646 offensive'],
         'source':   'El Fasher (Oct 2025) demonstrated the siege-to-fall-to-atrocity '
                     'sequence; El Obeid is the same pattern on a strategically '
                     'more consequential axis',
@@ -72,6 +74,7 @@ RED_LINES = [
         'icon':     '\U0001F3AF',
         'category': 'kinetic_trigger',
         'vectors':  ['kinetic'],
+        'event_keywords': ['port sudan drone strike', 'port sudan falls', 'port sudan overrun', 'port sudan agreement'],
         'source':   'Port Sudan is simultaneously the seat of government, the aid '
                     'lifeline, and the site of Russia\'s naval ambition -- strikes '
                     'there couple military, humanitarian, and great-power vectors',
@@ -86,6 +89,7 @@ RED_LINES = [
         'icon':     '\u2693',
         'category': 'hub_trigger',
         'vectors':  ['russia_plug'],
+        'event_keywords': ['russia warship port sudan', 'russia naval base activated sudan', 'russian frigate port sudan', 'russian troops port sudan', 'russia sudan base operational'],
         'source':   'Post-Assad loss of Tartus makes Red Sea basing the Africa Corps '
                     'supply-chain substitute; activation converts influence into '
                     'durable projection',
@@ -100,6 +104,7 @@ RED_LINES = [
         'icon':     '\U0001F6E2\uFE0F',
         'category': 'spillover_trigger',
         'vectors':  ['spillover_south'],
+        'event_keywords': ['petrodar pipeline attack', 'south sudan pipeline sudan war', 'rsf south sudan territory', 'blue nile front open', 'splm-n advance', 'al-hilu offensive', 'blue nile clashes'],
         'source':   'South Sudan draws two-thirds of state revenue through a pipeline '
                     'crossing Sudanese territory; severing it couples Sudan\'s war to '
                     'South Sudanese state solvency',
@@ -114,6 +119,7 @@ RED_LINES = [
         'icon':     '\u26A0\uFE0F',
         'category': 'spillover_trigger',
         'vectors':  ['spillover_west'],
+        'event_keywords': ['chad-sudan war confirmed', 'chad military intervention sudan', 'sudan strikes chad', 'saf strikes amdjarass', 'rsf cross-border chad', 'rsf attacks chad', 'zaghawa massacre', 'um baru attack'],
         'source':   'Chad hosts both the largest Sudanese refugee population and the '
                     'alleged RSF resupply corridor -- the two functions are '
                     'geographically inseparable',
@@ -258,6 +264,7 @@ def _score_red_lines(scan_data):
     """
     vectors = scan_data.get('vector_levels', {}) or {}
     compound = scan_data.get('compound_convergence', {}) or {}
+    matched = set(scan_data.get('matched_phrases', []) or [])
     triggered = []
 
     for rl in RED_LINES:
@@ -291,8 +298,34 @@ def _score_red_lines(scan_data):
             triggered.append({**_rl_public(rl), 'status': status, 'trigger': trig})
             continue
 
-        # ── Standard vector-max red lines ──
         rl_max = max((vectors.get(v, 0) for v in rl.get('vectors', [])), default=0)
+
+        # ── EVENT-type red lines: require the EVENT, not just a hot vector ──
+        # A red line that names a specific occurrence ("El Obeid Falls",
+        # "Port Sudan Struck") must not breach merely because its vector hit
+        # L4. Doing so publishes a factual claim about a city falling on the
+        # strength of an unrelated casualty report -- and that claim rides to
+        # the regional BLUF and the GPI. A hot vector without the named event
+        # is APPROACHING: the conditions are present, the event is not.
+        ev = rl.get('event_keywords')
+        if ev:
+            fired = [k for k in ev if k in matched]
+            if fired:
+                status = 'BREACHED'
+                trig = 'observed: %s' % fired[0]
+            elif rl_max >= 4:
+                status = 'APPROACHING'
+                trig = ('%s vector at L%d, but the named event is not present in '
+                        'the corpus this cycle' % (rl['category'], rl_max))
+            elif rl_max == 3:
+                status = 'APPROACHING'
+                trig = f"{rl['category']} vector at L{rl_max}"
+            else:
+                status, trig = 'QUIET', ''
+            triggered.append({**_rl_public(rl), 'status': status, 'trigger': trig})
+            continue
+
+        # ── CONDITION-type red lines: a level IS the finding ──
         if rl_max >= 4:
             status = 'BREACHED'
         elif rl_max == 3:
@@ -311,6 +344,7 @@ def _rl_public(rl):
         'id': rl['id'], 'label': rl['label'], 'detail': rl['detail'],
         'severity': rl['severity'], 'color': rl['color'], 'icon': rl['icon'],
         'category': rl['category'], 'source': rl['source'],
+        'gate': 'event' if rl.get('event_keywords') else 'condition',
     }
 
 

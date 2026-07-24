@@ -1048,6 +1048,11 @@ def classify_articles(articles):
         'uae_axis_signals': [],
         'peace_track_signals': [],
         'libya_haftar_signals': [],
+        # Which specific phrases actually matched. Red lines that name a
+        # SPECIFIC event (a city falling, a base activating) check this instead
+        # of the vector max -- otherwise any L4 kinetic reading breaches
+        # "El Obeid Falls" whether or not El Obeid fell.
+        'matched_phrases': set(),
     }
 
     # Patron sub-tag keyword sets (for saf_patron composite drill-down)
@@ -1085,6 +1090,16 @@ def classify_articles(articles):
         # theatre even if the article names no tracked actor by our exact
         # keyword. ──
         for level in range(5, 0, -1):
+            for _vname, _trig in (
+                ('kinetic', KINETIC_TRIGGERS), ('russia_plug', RUSSIA_PLUG_TRIGGERS),
+                ('uae_axis', UAE_AXIS_TRIGGERS), ('saf_patron', SAF_PATRON_TRIGGERS),
+                ('peace_track', PEACE_TRACK_TRIGGERS),
+                ('spillover_south', SPILLOVER_SOUTH_TRIGGERS),
+                ('spillover_west', SPILLOVER_WEST_TRIGGERS),
+                ('libya_haftar', LIBYA_HAFTAR_TRIGGERS)):
+                for _kw in _trig.get(level, []):
+                    if _kw in text:
+                        theatre_summary['matched_phrases'].add(_kw)
             for kw in KINETIC_TRIGGERS.get(level, []):
                 if kw in text and level > theatre_summary['kinetic_max']:
                     theatre_summary['kinetic_max'] = level
@@ -1797,6 +1812,7 @@ def run_sudan_rhetoric_scan(days=3):
             'spillover_west':  max_spillover_west,
             'libya_haftar':    max_libya_haftar,
         },
+        'matched_phrases': sorted(theatre_summary.get('matched_phrases', set())),
         'patron_subtags': {
             'egypt':  theatre_summary.get('saf_patron_egypt_max', 0),
             'ksa':    theatre_summary.get('saf_patron_ksa_max', 0),
