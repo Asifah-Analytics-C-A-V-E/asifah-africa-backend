@@ -1662,6 +1662,10 @@ def run_sudan_rhetoric_scan(days=3):
             'commodity': commodity_read,
             'russia_hub_parity': russia_hub_read,
         },
+        # Set from the preview so the INTERPRETER (which runs below, before the
+        # fingerprint write) can see it. Line ~1750 overwrites with the identical
+        # value returned by _write_crosstheater_signal -- same inputs, idempotent.
+        'compound_convergence': compound_preview,
         'actors': actor_results,
         'conditional_threats': theatre_summary.get('conditional_threats', [])[:8],
         'crosstheater_coordination': [],
