@@ -76,7 +76,7 @@ UPSTASH_REDIS_TOKEN = (os.environ.get('UPSTASH_REDIS_TOKEN')
 # rollup, prose, and GPI feed pick it up with zero further wiring.
 TRACKER_KEYS = {
     'somalia': 'rhetoric:somalia:latest',   # v1.0 Jul 21 2026 -- junction tracker (first Africa tracker)
-    # 'sudan':        'rhetoric:sudan:latest',
+    'sudan':   'rhetoric:sudan:latest',     # v1.0 Jul 24 2026 -- hub tracker (Russia/UAE/SAF-patron plugs)
     # 'mali':         'rhetoric:mali:latest',
     # 'burkina_faso': 'rhetoric:burkina_faso:latest',
     # 'niger':        'rhetoric:niger:latest',
@@ -110,9 +110,35 @@ THEATRE_DISPLAY = {
     'nigeria':      'NIGERIA',
 }
 
-# Top-N signals emitted to GPI
-TOP_SIGNALS_COUNT = 12
-MAX_PER_THEATRE   = 3
+# ── SIGNAL POOL TUNING (v1.1.0 Jul 24 2026) ─────────────────────────────
+# THE LENS PRINCIPLE: every layer DOWN gets a wider lens, every layer UP a
+# narrower one. Country pages show everything their tracker emits (including
+# L2 "watch" texture). This regional layer gates to L2+ and pools the best
+# across Africa. The GPI narrows again above us.
+TOP_SIGNALS_COUNT = 15   # was 12 -- headroom for the Sahel bundle + Libya-east.
+                         # Deliberately leaves slots empty today: they exist so
+                         # arriving trackers have somewhere to land, not to be filled.
+MAX_PER_THEATRE   = 3    # No single country monopolises the regional read.
+                         # 15 / 3 = five countries at full quota, with headroom.
+
+MIN_LEVEL_TO_SURFACE = 2 # L0/L1 stays on the country page. A signal has to be
+                         # at least "tension" to compete at regional altitude.
+
+DIPLOMATIC_SURFACE_CAP = 3
+# Mirrors the GPI's guard of the same name (Jun 14 2026). De-escalation MUST
+# surface. Diplomatic signals are SCORE REDUCERS, so an escalation-weighted
+# priority sort buries them structurally -- Sudan's mediation signal lands at
+# priority 9 while its kinetic red lines sit at 12-13, so a straight top-3
+# per-theatre cut drops the off-ramp entirely and the GPI never learns the
+# mediation track exists. Up to this many diplomatic signals bypass
+# MAX_PER_THEATRE and are never gate-kept out.
+#
+# Recognised by explicit pressure_type='diplomatic' (canonical native tagging,
+# which the GPI also trusts) OR by category, for trackers not yet migrated.
+DIPLOMATIC_CATEGORIES = (
+    'diplomatic_offramp', 'diplomatic_active', 'mediation_active',
+    'off_ramp_active', 'ceasefire', 'diplomatic',
+)
 
 # Synthesis cache
 BLUF_CACHE_KEY      = 'rhetoric:africa:regional_bluf'
@@ -576,6 +602,36 @@ def _build_bluf_prose(posture, trackers, missing):
 # ============================================================
 # SIGNAL POOL
 # ============================================================
+def _is_diplomatic(sig):
+    """Is this a de-escalation / off-ramp signal?
+
+    Explicit pressure_type wins (canonical native tagging -- the GPI trusts the
+    same field). Falls back to category matching for trackers not yet migrated.
+    """
+    if not isinstance(sig, dict):
+        return False
+    if str(sig.get('pressure_type', '')).lower() == 'diplomatic':
+        return True
+    return str(sig.get('category', '')).lower() in DIPLOMATIC_CATEGORIES
+
+
+def _surfaces_regionally(sig):
+    """Regional-altitude gate: L2+ OR any diplomatic signal.
+
+    Diplomatic signals bypass the level floor because an L1 mediation reference
+    is still the only observable off-ramp -- absence of an off-ramp is itself a
+    read, and we cannot report absence honestly if we filtered the presence out.
+    Regional synthesis signals always surface.
+    """
+    if not isinstance(sig, dict):
+        return False
+    if sig.get('theatre') == 'regional':
+        return True
+    if _is_diplomatic(sig):
+        return True
+    return _safe_int(sig.get('level'), 0) >= MIN_LEVEL_TO_SURFACE
+
+
 def _build_signals(posture, trackers):
     """Collect, enrich, and rank the signal pool GPI consumes."""
     all_signals = []
@@ -651,19 +707,47 @@ def _build_signals(posture, trackers):
                                % (disp, actor, _safe_str(anom.get('deviation'), 'deviation unstated'))),
             })
 
-    # 4) Sort with per-theatre quota; regional signals bypass the quota
-    all_signals.sort(key=lambda s: (-_safe_int(s.get('priority'), 5),
-                                    -_safe_int(s.get('level'), 0)))
-    selected, per_theatre = [], {}
-    for s in all_signals:
+    # 4) Gate, then sort with per-theatre quota.
+    #    Order of operations matters: gate BEFORE the quota, so a country's
+    #    three slots go to signals that actually cleared the bar.
+    #
+    #    Two bypasses:
+    #      * theatre == 'regional'  -- synthesis-level signals, not a country's
+    #      * diplomatic signals     -- score reducers the sort would bury
+    gated = [s for s in all_signals
+             if _surfaces_regionally(s)]
+
+    gated.sort(key=lambda s: (-_safe_int(s.get('priority'), 5),
+                              -_safe_int(s.get('level'), 0)))
+
+    selected, per_theatre, dip_seen = [], {}, 0
+    for s in gated:
         t = s.get('theatre', 'unknown')
         if t == 'regional':
             selected.append(s)
             continue
+        if _is_diplomatic(s):
+            # Bypass the per-theatre quota up to the cap. Diplomatic signals do
+            # NOT consume a country's escalatory slots -- they sit beside them,
+            # the same way the doctrine reports mediation beside kinetic tempo
+            # rather than netting it against them.
+            if dip_seen < DIPLOMATIC_SURFACE_CAP:
+                dip_seen += 1
+                selected.append(s)
+                continue
+            # Past the cap it competes normally.
         if per_theatre.get(t, 0) >= MAX_PER_THEATRE:
             continue
         per_theatre[t] = per_theatre.get(t, 0) + 1
         selected.append(s)
+
+    dropped = len(all_signals) - len(gated)
+    if dropped:
+        print('[Africa BLUF] Gate: %d signal(s) below L%d held at country altitude'
+              % (dropped, MIN_LEVEL_TO_SURFACE))
+    if dip_seen:
+        print('[Africa BLUF] Diplomatic guard: %d de-escalation signal(s) surfaced'
+              % dip_seen)
     return selected
 
 
