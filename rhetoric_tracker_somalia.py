@@ -86,6 +86,28 @@ try:
 except ImportError:
     BLUESKY_AVAILABLE = False
 
+# GDELT via the shared gateway (Jul 24 2026) — the tracker's GDELT lane
+# exists ONLY through the gateway (serialised, paced, cached, breakered).
+# No direct GDELT fallback here by design: absent gateway = no GDELT,
+# stated honestly at boot.
+try:
+    from gdelt_gateway import gdelt_fetch as _gw_gdelt_fetch
+    GDELT_AVAILABLE = True
+    print("[Somalia Rhetoric] \u2705 GDELT gateway available")
+except ImportError:
+    GDELT_AVAILABLE = False
+    print("[Somalia Rhetoric] \u26a0\ufe0f GDELT gateway not available — no GDELT lane")
+
+# GDELT queries mirror the RSS vocabulary: core insurgency, AUSSOM,
+# the Somaliland junction, plus Arabic and Somali-language passes.
+SOMALIA_GDELT_QUERIES = [
+    ('"al-Shabaab" Somalia',                  'eng'),
+    ('Somalia AUSSOM',                        'eng'),
+    ('Somaliland (recognition OR Berbera)',   'eng'),
+    ('\u0627\u0644\u0635\u0648\u0645\u0627\u0644 \u0627\u0644\u0634\u0628\u0627\u0628', 'ara'),
+    ('Soomaaliya Shabaab',                    'som'),
+]
+
 RHETORIC_CACHE_KEY  = 'rhetoric:somalia:latest'
 RHETORIC_CACHE_TTL  = 13 * 3600  # 13h -- covers 12h scan cycle + 1h buffer
 LASTGOOD_KEY        = 'rhetoric:somalia:lastgood'
@@ -769,6 +791,28 @@ def fetch_rhetoric_articles(days=3):
     rss_count = len(articles)
     print(f"[Somalia Rhetoric] RSS: {rss_count} articles")
 
+    # ── GDELT (via shared gateway) ──
+    if GDELT_AVAILABLE:
+        gdelt_count = 0
+        for gq, glang in SOMALIA_GDELT_QUERIES:
+            try:
+                raw = _gw_gdelt_fetch(gq, language=glang, timespan=f'{days}d',
+                                      maxrecords=25, label=f'somalia/{glang}')
+                for a in raw:
+                    articles.append({
+                        'title': a.get('title', ''),
+                        'url': a.get('url', ''),
+                        'published': a.get('published', ''),
+                        'description': a.get('title', ''),
+                        'source': a.get('source') or f'GDELT/{glang}',
+                        'source_type': 'gdelt',
+                        'weight': 0.85,
+                    })
+                    gdelt_count += 1
+            except Exception as e:
+                print(f"[Somalia Rhetoric] GDELT {glang} error: {str(e)[:80]}")
+        print(f"[Somalia Rhetoric] GDELT: {gdelt_count} articles")
+
     # ── Reddit ──
     try:
         reddit_posts = fetch_reddit_somalia(days=days)
@@ -816,6 +860,22 @@ def fetch_rhetoric_articles(days=3):
             print(f"[Somalia Rhetoric] Bluesky: {bs_count} posts")
         except Exception as e:
             print(f"[Somalia Rhetoric] Bluesky error: {str(e)[:80]}")
+
+    # ── Dedup by URL (GDELT and Google News RSS surface the same stories;
+    #    duplicates would double-count in the classifier and inflate levels).
+    #    First occurrence wins; empty URLs are never treated as duplicates. ──
+    seen_urls = set()
+    deduped = []
+    for a in articles:
+        u = (a.get('url') or '').strip()
+        if u and u in seen_urls:
+            continue
+        if u:
+            seen_urls.add(u)
+        deduped.append(a)
+    if len(deduped) < len(articles):
+        print(f"[Somalia Rhetoric] Dedup: {len(articles) - len(deduped)} duplicate URLs dropped")
+    articles = deduped
 
     print(f"[Somalia Rhetoric] Total articles: {len(articles)}")
     return articles
