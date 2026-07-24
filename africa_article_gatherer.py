@@ -514,8 +514,37 @@ def fetch_all_africa_wide_rss():
 # ============================================================
 # GDELT FETCH (per-country)
 # ============================================================
+# ── Shared GDELT gateway (Jul 24 2026) ────────────────────────────────
+# The gatherer is the heaviest GDELT caller on this backend (per-country
+# pools, up to 3 queries per country, every 12h). Routing it through the
+# gateway is what makes the semaphore mean anything -- a single direct
+# caller left outside the lane still races the same IP. The per-run
+# circuit breaker below is preserved as the fallback path.
+try:
+    from gdelt_gateway import gdelt_fetch as _gw_gdelt_fetch
+    _GDELT_GATEWAY = True
+except ImportError:
+    print("[africa_articles] gdelt_gateway not available -- using direct GDELT calls")
+    _GDELT_GATEWAY = False
+
+
 def _fetch_gdelt_query(query, lang='eng', country_id=None):
     global _gdelt_tripped
+    if _GDELT_GATEWAY:
+        # Adapt the gateway's canonical shape into the gatherer's own
+        # dialect (source = "GDELT/{lang}" string, weight, bucket, country).
+        raw = _gw_gdelt_fetch(query, language=lang, timespan='14d',
+                              maxrecords=30, label=f'africa-gatherer/{lang}')
+        return [{
+            'title':       (a.get('title') or '')[:300],
+            'url':         a.get('url') or '',
+            'published':   a.get('published') or '',
+            'description': (a.get('title') or '')[:500],
+            'source':      f"GDELT/{lang}",
+            'weight':      0.95,
+            'bucket':      'news',
+            'country':     country_id,
+        } for a in raw]
     if _gdelt_tripped:
         return []
     """Fetch one GDELT query in one language. Returns list of article dicts."""
