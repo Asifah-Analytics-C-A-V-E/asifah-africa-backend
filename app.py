@@ -300,6 +300,19 @@ def is_cache_fresh(cached_data, max_hours=None):
 
 _gdelt_failed_this_scan = False
 
+# ── Shared GDELT gateway (Jul 24 2026) ────────────────────────────────
+# Same fix as the other four backends: one serialised, paced GDELT lane
+# per process (semaphore + circuit breaker + 15-min response cache)
+# instead of every caller racing the same IP into a soft-block. The
+# per-scan circuit breaker below is preserved as the fallback path when
+# the gateway file is absent.
+try:
+    from gdelt_gateway import gdelt_fetch as _gw_fetch
+    _GDELT_GATEWAY = True
+except ImportError:
+    print("[Africa GDELT] gdelt_gateway not available -- using direct GDELT calls")
+    _GDELT_GATEWAY = False
+
 
 def _reset_gdelt_circuit():
     global _gdelt_failed_this_scan
@@ -309,6 +322,21 @@ def _reset_gdelt_circuit():
 def fetch_gdelt(query, days=7, language='eng', max_records=50):
     """Fetch GDELT articles. Short-circuits after first failure per scan."""
     global _gdelt_failed_this_scan
+    if _GDELT_GATEWAY:
+        # Route through the shared gateway; adapt its canonical shape back
+        # into this file's own dialect (source is a STRING domain,
+        # `published`, description = seendate -- domain, plus `query`).
+        raw = _gw_fetch(f'"{query}"', language=language, timespan=f'{days}d',
+                        maxrecords=max_records, label=f'africa/{language}')
+        return [{
+            'title':       a.get('title', ''),
+            'description': (a.get('published') or '') + ' -- ' + (a.get('source') or ''),
+            'url':         a.get('url', ''),
+            'published':   a.get('published', ''),
+            'source':      a.get('source') or 'GDELT',
+            'query':       query,
+            'language':    language,
+        } for a in raw]
     if _gdelt_failed_this_scan:
         return []
     params = {
