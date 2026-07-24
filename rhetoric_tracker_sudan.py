@@ -144,6 +144,15 @@ HISTORY_KEY         = 'rhetoric:sudan:history'
 SCAN_LOCK_KEY       = 'rhetoric:sudan:scanlock'
 SCAN_LOCK_TTL       = 600  # 10 min
 
+# Corpus-health guard (Jul 24 2026). An empty or collapsed corpus is a FAILED
+# FETCH, not a quiet week. Without this, a feed outage publishes L0 "below
+# escalation threshold" over a known-good read -- the tracker hallucinating
+# calm from its own outage. (Inverse of the Tempo Baseline Engine's original
+# bug, which hallucinated menace from the same cause.)
+CORPUS_BASELINE_KEY   = 'rhetoric:sudan:corpus_baseline'
+CORPUS_MIN_ABSOLUTE   = 5     # below this, treat as an outage regardless of baseline
+CORPUS_DEGRADED_RATIO = 0.40  # below 40% of rolling baseline = degraded, flag it
+
 # Cross-tracker Redis reads (compound-risk layer)
 HUMANITARIAN_KEY    = 'africa:humanitarian:sudan'   # shipped Jul 24 2026
 COMMODITY_KEY       = 'africa:commodity:sudan'      # commodity_proxy_africa
@@ -981,6 +990,11 @@ def fetch_rhetoric_articles(days=3):
     articles = deduped
 
     print(f"[Sudan Rhetoric] Total articles: {len(articles)}")
+    if not articles:
+        print("[Sudan Rhetoric] \u26a0\ufe0f ZERO articles from ALL lanes. Check, in order: "
+              "Google News RSS soft-block (most likely after repeated force scans), "
+              "GDELT gateway 429 backoff, Reddit UA block. The per-lane counts above "
+              "name the failure.")
     return articles
 
 
@@ -1599,6 +1613,59 @@ def _detect_crosstheater_coordination(sudan_plug_level=0):
 
 
 # ============================================
+# CORPUS HEALTH  (the denominator)
+# ============================================
+def _assess_corpus_health(article_count):
+    """Compare this scan's corpus against a rolling baseline.
+
+    Returns (status, baseline, note) where status is 'ok' | 'degraded' | 'outage'.
+    Absence-honest: with fewer than 3 recorded scans there is no baseline yet,
+    so only the absolute floor applies and we say the baseline is accumulating.
+    """
+    try:
+        b = _redis_get(CORPUS_BASELINE_KEY) or {'avg': 0, 'scans': 0}
+        avg, scans = b.get('avg', 0), b.get('scans', 0)
+
+        if article_count < CORPUS_MIN_ABSOLUTE:
+            return ('outage', avg,
+                    'Corpus collapsed to %d articles (floor is %d). Treating as a feed '
+                    'outage, not a quiet cycle -- scores are NOT published from this scan.'
+                    % (article_count, CORPUS_MIN_ABSOLUTE))
+
+        if scans >= 3 and avg > 0 and article_count < avg * CORPUS_DEGRADED_RATIO:
+            return ('degraded', avg,
+                    'Corpus at %d articles vs a rolling baseline of %.0f (%.0f%%). Scores '
+                    'published but read as a floor, not a ceiling -- quiet here may be the '
+                    'feeds, not the theatre.'
+                    % (article_count, avg, 100.0 * article_count / avg))
+
+        note = ('Baseline accumulating (%d scan(s) recorded).' % scans) if scans < 3 else \
+               ('Corpus healthy: %d articles vs baseline %.0f.' % (article_count, avg))
+        return ('ok', avg, note)
+    except Exception as e:
+        print(f"[Sudan Rhetoric] Corpus health check error: {str(e)[:90]}")
+        return ('ok', 0, 'Corpus health unavailable this cycle.')
+
+
+def _update_corpus_baseline(article_count):
+    """Roll the corpus-size baseline forward. Outage scans are NOT recorded --
+    a failed fetch must not drag the denominator down and normalise itself."""
+    try:
+        if article_count < CORPUS_MIN_ABSOLUTE:
+            return
+        b = _redis_get(CORPUS_BASELINE_KEY) or {'avg': 0, 'scans': 0}
+        n = b.get('scans', 0)
+        avg = b.get('avg', 0)
+        new_avg = (avg * n + article_count) / (n + 1) if n < 30 else (avg * 0.9 + article_count * 0.1)
+        _redis_set(CORPUS_BASELINE_KEY,
+                   {'avg': round(new_avg, 1), 'scans': min(n + 1, 999),
+                    'last_count': article_count},
+                   ttl=60 * 24 * 3600)
+    except Exception as e:
+        print(f"[Sudan Rhetoric] Corpus baseline update error: {str(e)[:90]}")
+
+
+# ============================================
 # SCAN ORCHESTRATOR
 # ============================================
 def run_sudan_rhetoric_scan(days=3):
@@ -1606,6 +1673,40 @@ def run_sudan_rhetoric_scan(days=3):
     print(f"[Sudan Rhetoric] Starting scan ({days}-day window)...")
 
     articles = fetch_rhetoric_articles(days)
+
+    # ── CORPUS-HEALTH GATE ──────────────────────────────────────────────
+    # Refuse to publish scores from an empty corpus. Overwriting a known-good
+    # read with L0 "below escalation threshold" because the feeds died is a
+    # false analytical claim, and it is indistinguishable on the page from a
+    # genuinely quiet theatre. Say "the sensor failed" instead.
+    corpus_status, corpus_baseline, corpus_note = _assess_corpus_health(len(articles))
+    if corpus_status == 'outage':
+        print(f"[Sudan Rhetoric] \u26a0\ufe0f CORPUS OUTAGE -- {corpus_note}")
+        lastgood = _redis_get(LASTGOOD_KEY) or _redis_get(RHETORIC_CACHE_KEY)
+        payload = dict(lastgood) if isinstance(lastgood, dict) else {}
+        payload.update({
+            'success': True,
+            'country': 'sudan',
+            'corpus_health': {
+                'status': 'outage',
+                'article_count': len(articles),
+                'baseline': corpus_baseline,
+                'note': corpus_note,
+            },
+            'scan_aborted': True,
+            'stale': bool(payload),
+            'scan_attempted_at': datetime.now(timezone.utc).isoformat(),
+        })
+        if not payload.get('theatre_label'):
+            payload.update({
+                'rhetoric_score': 0, 'theatre_escalation_level': 0,
+                'theatre_label': 'Sensor offline', 'article_count': 0,
+                'top_signals': [], 'actors': {}, 'vector_levels': {},
+                'disclaimer': 'This composite is a CONVERGENCE indicator, NOT a probability of action.',
+            })
+        # Deliberately does NOT write the cache: last-known-good survives.
+        return payload
+
     actor_results, theatre_summary = classify_articles(articles)
 
     # Escalatory theatre level = max across ESCALATORY vectors (peace_track excluded)
@@ -1675,6 +1776,12 @@ def run_sudan_rhetoric_scan(days=3):
         'scan_date': datetime.now(timezone.utc).isoformat(),
         'window_days': days,
         'article_count': len(articles),
+        'corpus_health': {
+            'status': corpus_status,
+            'article_count': len(articles),
+            'baseline': corpus_baseline,
+            'note': corpus_note,
+        },
         'rhetoric_score': rhetoric_score,
         'theatre_escalation_level': theatre_escalation_level,
         'theatre_label': ESCALATION_LEVELS.get(theatre_escalation_level, {}).get('label', 'Unknown'),
@@ -1713,7 +1820,8 @@ def run_sudan_rhetoric_scan(days=3):
         'disclaimer': 'This composite is a CONVERGENCE indicator, NOT a probability of action.',
     }
 
-    # ── Actor baselines + silence anomalies (mode='actor') ──
+    # ── Corpus + actor baselines ──
+    _update_corpus_baseline(len(articles))
     baselines = _update_actor_baselines(actor_results)
     result['silence_anomalies'] = _detect_silence_anomalies(actor_results, baselines)
 
@@ -1887,6 +1995,7 @@ def register_sudan_rhetoric_endpoints(app):
             'top_signals': cached.get('top_signals', []),
             'so_what': _interp.get('so_what', {}),
             'red_lines_breached': _rl.get('breached_count', 0),
+            'corpus_health': cached.get('corpus_health', {}),
             'scan_date': cached.get('scan_date', ''),
             'stale': bool(cached.get('stale')),
         })
