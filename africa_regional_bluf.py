@@ -61,6 +61,17 @@ from datetime import datetime, timezone
 
 import requests
 
+# ── Shared spoke-and-wheel reader (v1.0.1, Jul 24 2026) ──────────────
+# Byte-identical across ALL backends -- gdelt_gateway.py pattern. Reads the
+# spoke/wheel keyspace straight from shared Redis; no cross-backend HTTP.
+# Optional: absent file = no panel, BLUF still builds.
+try:
+    from spoke_wheel_reader import build_convergence_panel as _build_wheel_panel
+    _WHEEL_READER = True
+except ImportError:
+    _WHEEL_READER = False
+    print("[Africa BLUF] spoke_wheel_reader not available -- convergence panel disabled")
+
 
 # ============================================================
 # CONFIG
@@ -754,6 +765,39 @@ def _build_signals(posture, trackers):
 # ============================================================
 # MAIN BUILD
 # ============================================================
+# ============================================================
+# CONVERGENCE PANEL  (spoke & wheel -- Africa is SPOKES ONLY)
+# ============================================================
+# Africa hosts NO hub. Every wheel read here is OUTBOUND: African countries
+# feed hubs that live on other backends -- Turkey (Europe), Russia (Europe),
+# and in time China (Asia) and a light Israel touch via Somaliland.
+#
+# RESIDENT_HUBS is therefore empty, and the panel renders as pure emanating.
+# The moment a hub does become resident here, adding its slug to this list is
+# the entire change.
+#
+# NOTHING is a hardcoded country list: local_countries derives from
+# TRACKER_KEYS, so the Sahel bundle joins the emanating scan the moment those
+# trackers register. Wagner spokes across Mali/Niger/Burkina Faso and the
+# future BRI spokes need no edit here and none in the frontend.
+RESIDENT_HUBS = []
+
+
+def _build_convergence_panel():
+    """Outbound wheel read for the Africa payload. Never raises."""
+    if not _WHEEL_READER:
+        return None
+    try:
+        return _build_wheel_panel(
+            resident_hubs=RESIDENT_HUBS,
+            local_countries=list(TRACKER_KEYS.keys()),
+            region='africa',
+        )
+    except Exception as e:
+        print(f"[Africa BLUF] Convergence panel failed (non-fatal): {str(e)[:140]}")
+        return None
+
+
 def build_regional_bluf(force=False):
     """Build the Africa regional BLUF."""
     if not force:
@@ -845,6 +889,7 @@ def build_regional_bluf(force=False):
             'trackers_stale':     trackers_stale,
             'trackers_missing':   trackers_missing,
             'picture_complete':   (len(trackers_missing) == 0),
+            'convergence_panel':  _build_convergence_panel(),
             'theatre_summary':    theatre_summary,
             'generated_at':       datetime.now(timezone.utc).isoformat(),
             'version':            '1.0.1',
