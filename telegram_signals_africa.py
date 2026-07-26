@@ -185,11 +185,25 @@ COUNTRY_RELEVANCE_TERMS = {
 # ============================================================
 
 def _telegram_available():
-    """Check if Telegram integration is fully configured."""
+    """Check if Telegram integration is fully configured.
+
+    Diagnostic added Jul 26 2026. The TELETHON_AVAILABLE branch returned False
+    with NO log line, so a production cycle that fetched nothing looked
+    identical to a cycle where the channels genuinely had no Africa content.
+    Mali and Somalia both logged `shared gate kept 0, dropped 0` and there was
+    no way to tell which failure it was. Now it says.
+    """
     if not TELETHON_AVAILABLE:
+        print("[Telegram Africa] ❌ Telethon NOT INSTALLED -- the entire "
+              "Telegram lane is dark. This is a dependency problem, not a "
+              "content problem: no channel roster will help until it is fixed.")
         return False
-    if not all([TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE]):
-        print("[Telegram Africa] ⚠️ Missing environment variables")
+    missing = [n for n, v in (('TELEGRAM_API_ID', TELEGRAM_API_ID),
+                              ('TELEGRAM_API_HASH', TELEGRAM_API_HASH),
+                              ('TELEGRAM_PHONE', TELEGRAM_PHONE)) if not v]
+    if missing:
+        print(f"[Telegram Africa] ⚠️ Missing env vars: {', '.join(missing)} "
+              f"-- lane is dark until set on this backend.")
         return False
     return True
 
@@ -360,8 +374,12 @@ def _get_shared_messages():
         _SHARED_CACHE['messages'] = fetched
         _SHARED_CACHE['fetched_at'] = now
     else:
-        print("[Telegram Africa] ⚠️ shared fetch returned 0 messages -- "
-              "keeping previous cache (absence-honest)")
+        print(f"[Telegram Africa] ⚠️ shared fetch returned 0 messages from "
+              f"{len(SHARED_CHANNELS)} channels ({', '.join(SHARED_CHANNELS)}) -- "
+              f"keeping previous cache (absence-honest). If this repeats, the "
+              f"problem is the FETCH, not the country roster: ClashReport, "
+              f"wartranslated and MiddleEastSpectator all cover Sahel/Wagner "
+              f"material and should be producing Mali hits.")
     return _SHARED_CACHE['messages']
 
 
