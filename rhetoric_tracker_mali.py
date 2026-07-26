@@ -151,6 +151,10 @@ MALI_GDELT_QUERIES = [
     ('Mali Africa Corps arm\u00e9e russe',  'fra'),
     ('Mali blocus carburant Bamako JNIM',   'fra'),
     ('Mali FLA Azawad Kidal offensive',     'fra'),
+    # Arabic: Sahel coverage in Arabic media carries northern-Mali and
+    # Azawad reporting that francophone outlets underweight.
+    ('\u0645\u0627\u0644\u064a \u0627\u0644\u0633\u0627\u062d\u0644', 'ara'),
+    ('\u0623\u0632\u0648\u0627\u062f \u0645\u0627\u0644\u064a',      'ara'),
 ]
 
 RHETORIC_CACHE_KEY  = 'rhetoric:mali:latest'
@@ -668,23 +672,58 @@ def _acquire_scan_lock():
 # RSS SOURCES (EN + FR — Mali's media is francophone)
 # ============================================
 RHETORIC_RSS_FEEDS = [
+    # ── WIDENED Jul 26 2026 ────────────────────────────────────────────
+    # First production cycle returned 5 RSS articles. The queries were too
+    # narrow: multi-term Google News searches match almost nothing on a
+    # theatre this underreported. Broad country terms plus LOCAL outlets is
+    # what actually fills the corpus here.
+    ("https://news.google.com/rss/search?q=Mali&hl=fr&gl=FR&ceid=FR:fr", 0.85),
+    ("https://news.google.com/rss/search?q=Mali+s%C3%A9curit%C3%A9&hl=fr&gl=FR&ceid=FR:fr", 0.95),
+    ("https://news.google.com/rss/search?q=Mali+arm%C3%A9e&hl=fr&gl=FR&ceid=FR:fr", 0.95),
+    ("https://news.google.com/rss/search?q=Bamako&hl=fr&gl=FR&ceid=FR:fr", 0.9),
+    ("https://news.google.com/rss/search?q=Sahel&hl=fr&gl=FR&ceid=FR:fr", 0.8),
+
+    # ── LOCAL MALIAN PRESS ─────────────────────────────────────────────
+    # Studio Tamani (Fondation Hirondelle) is the strongest single Mali
+    # source: independent, broadcasts in French AND Bambara, and covers
+    # security incidents the national outlets skip.
+    ("https://news.google.com/rss/search?q=site:studiotamani.org&hl=fr&gl=FR&ceid=FR:fr", 1.0),
+    ("https://news.google.com/rss/search?q=site:maliweb.net&hl=fr&gl=FR&ceid=FR:fr", 0.95),
+    ("https://news.google.com/rss/search?q=site:malijet.com&hl=fr&gl=FR&ceid=FR:fr", 0.9),
+    ("https://news.google.com/rss/search?q=site:bamada.net&hl=fr&gl=FR&ceid=FR:fr", 0.9),
+    ("https://news.google.com/rss/search?q=site:journaldumali.com&hl=fr&gl=FR&ceid=FR:fr", 0.9),
+    ("https://news.google.com/rss/search?q=site:sahelien.com&hl=fr&gl=FR&ceid=FR:fr", 0.95),
+    ("https://news.google.com/rss/search?q=site:lessormali.com&hl=fr&gl=FR&ceid=FR:fr", 0.85),
+
+    # ── Regional / specialist ──────────────────────────────────────────
+    ("https://news.google.com/rss/search?q=site:rfi.fr+Mali&hl=fr&gl=FR&ceid=FR:fr", 1.0),
+    ("https://news.google.com/rss/search?q=site:jeuneafrique.com+Mali&hl=fr&gl=FR&ceid=FR:fr", 0.95),
+    ("https://news.google.com/rss/search?q=site:apanews.net+Mali&hl=fr&gl=FR&ceid=FR:fr", 0.85),
+
+    # ── ARABIC LANE (new) ──────────────────────────────────────────────
+    # A genuine gap. Anadolu, Al Jazeera and Sahara Media cover the Sahel
+    # substantially, and carry northern-Mali/Azawad reporting francophone
+    # outlets underweight.
+    ("https://news.google.com/rss/search?q=%D9%85%D8%A7%D9%84%D9%8A&hl=ar&gl=EG&ceid=EG:ar", 0.9),
+    ("https://news.google.com/rss/search?q=%D9%85%D8%A7%D9%84%D9%8A+%D8%A7%D9%84%D8%B3%D8%A7%D8%AD%D9%84&hl=ar&gl=EG&ceid=EG:ar", 0.9),
+    ("https://news.google.com/rss/search?q=%D8%A3%D8%B2%D9%88%D8%A7%D8%AF&hl=ar&gl=EG&ceid=EG:ar", 0.85),
+
+    # ── English thematic (the original narrow set, retained) ────────────
     ("https://news.google.com/rss/search?q=Mali+Africa+Corps+Wagner&hl=en&gl=US&ceid=US:en", 1.0),
     ("https://news.google.com/rss/search?q=Mali+JNIM+blockade+Bamako&hl=en&gl=US&ceid=US:en", 1.0),
     ("https://news.google.com/rss/search?q=Mali+FLA+Azawad+Kidal&hl=en&gl=US&ceid=US:en", 0.95),
-    ("https://news.google.com/rss/search?q=Mali+junta+Goita+AES&hl=en&gl=US&ceid=US:en", 0.9),
     ("https://news.google.com/rss/search?q=Mali+Turkey+drones+Bayraktar&hl=en&gl=US&ceid=US:en", 0.9),
     ("https://news.google.com/rss/search?q=Sahel+Russia+Africa+Corps&hl=en&gl=US&ceid=US:en", 0.85),
-    # French — primary media language, higher weight than the English mirror
-    ("https://news.google.com/rss/search?q=Mali+arm%C3%A9e+russe+Africa+Corps&hl=fr&gl=FR&ceid=FR:fr", 1.0),
-    ("https://news.google.com/rss/search?q=Mali+blocus+carburant+Bamako&hl=fr&gl=FR&ceid=FR:fr", 1.0),
-    ("https://news.google.com/rss/search?q=Mali+FLA+Azawad+Kidal&hl=fr&gl=FR&ceid=FR:fr", 0.95),
-    ("https://news.google.com/rss/search?q=Mali+junte+Goita+AES&hl=fr&gl=FR&ceid=FR:fr", 0.9),
 ]
 
-MALI_SUBREDDITS = ['Mali', 'Africa', 'geopolitics', 'CredibleDefense', 'LessCredibleDefence']
+MALI_SUBREDDITS = ['Mali', 'Africa', 'geopolitics', 'CredibleDefense',
+                   'LessCredibleDefence', 'worldnews', 'anime_titties']
+# r/anime_titties is (genuinely) reddit's high-volume world-politics sub --
+# non-obvious, but a real Sahel source. Keyword gating below keeps it clean.
 MALI_REDDIT_KEYWORDS = [
     'mali', 'bamako', 'kidal', 'gao', 'jnim', 'azawad', 'fla',
-    'africa corps', 'wagner', 'sahel', 'goita',
+    'africa corps', 'wagner', 'sahel', 'goita', 'malian', 'timbuktu',
+    'mopti', 'tuareg', 'aes ', 'liptako',
 ]
 
 
@@ -799,7 +838,10 @@ def fetch_rhetoric_articles(days=3):
 
     if BLUESKY_AVAILABLE:
         try:
-            for p in (fetch_bluesky_for_target('mali', hours_back=days * 24) or []):
+            # Signature is (target, days=7, max_posts_per_account=20) -- calling
+            # it with hours_back raised TypeError and silently discarded ~20
+            # posts per cycle. Same bug exists in rhetoric_tracker_somalia.py.
+            for p in (fetch_bluesky_for_target('mali', days=max(1, days)) or []):
                 articles.append({
                     'title': (p.get('text') or '')[:200], 'url': p.get('url', ''),
                     'published': p.get('published', '') or p.get('date', ''),

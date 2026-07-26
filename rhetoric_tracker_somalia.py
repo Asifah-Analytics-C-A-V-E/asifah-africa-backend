@@ -844,7 +844,11 @@ def fetch_rhetoric_articles(days=3):
     # ── Bluesky (optional) ──
     if BLUESKY_AVAILABLE:
         try:
-            bs_posts = fetch_bluesky_for_target('somalia', hours_back=days * 24)
+            # FIXED Jul 26 2026: signature is (target, days=7,
+            # max_posts_per_account=20). Calling with hours_back raised
+            # TypeError every cycle and silently discarded the entire
+            # Bluesky lane. Found in Mali's first production scan.
+            bs_posts = fetch_bluesky_for_target('somalia', days=max(1, days))
             bs_count = 0
             for p in (bs_posts or []):
                 articles.append({
