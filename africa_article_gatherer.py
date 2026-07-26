@@ -374,6 +374,42 @@ AFRICA_WIDE_RSS_FEEDS = [
     ("https://news.google.com/rss/search?q=africa+site:crisisgroup.org&hl=en&gl=US&ceid=US:en", 0.95, "ngos"),
     # Tier 5: WHO Africa region health (loosened -- quoted form returned 0)
     ("https://news.google.com/rss/search?q=WHO+Africa+outbreak+OR+cholera+OR+ebola&hl=en&gl=US&ceid=US:en",  1.0, "ngos"),
+
+    # ════════════════════════════════════════════════════════════════════
+    # FRANCOPHONE LANE  (added Jul 26 2026)
+    # ════════════════════════════════════════════════════════════════════
+    # Every feed above this block is ENGLISH. Eleven of the twenty countries
+    # in COUNTRY_CONFIG carry 'franco': True -- the whole Sahel, Central
+    # Africa, the Maghreb fringe -- and those theatres are covered FIRST and
+    # in most depth by French-language press. Mali's first production scan
+    # returned five RSS articles against an English-only continent lane.
+    #
+    # Le Monde Afrique, RFI Afrique and Jeune Afrique are the three outlets
+    # a Sahel desk officer would actually read; AFP is the wire most African
+    # francophone papers republish. These are continent-wide, so keyword
+    # matching routes them to countries exactly as the English feeds are.
+    ("https://news.google.com/rss/search?q=site:lemonde.fr+Afrique&hl=fr&gl=FR&ceid=FR:fr",        1.05, "news"),
+    ("https://news.google.com/rss/search?q=site:rfi.fr+Afrique&hl=fr&gl=FR&ceid=FR:fr",            1.05, "news"),
+    ("https://news.google.com/rss/search?q=site:jeuneafrique.com&hl=fr&gl=FR&ceid=FR:fr",          1.0,  "news"),
+    ("https://news.google.com/rss/search?q=site:france24.com+Afrique&hl=fr&gl=FR&ceid=FR:fr",      0.95, "news"),
+    ("https://news.google.com/rss/search?q=site:lefigaro.fr+Afrique&hl=fr&gl=FR&ceid=FR:fr",       0.9,  "news"),
+    ("https://news.google.com/rss/search?q=site:liberation.fr+Afrique&hl=fr&gl=FR&ceid=FR:fr",     0.85, "news"),
+    ("https://news.google.com/rss/search?q=site:lepoint.fr+Afrique&hl=fr&gl=FR&ceid=FR:fr",        0.85, "news"),
+    ("https://news.google.com/rss/search?q=site:apanews.net&hl=fr&gl=FR&ceid=FR:fr",               0.9,  "news"),
+    # AFP is the wire most francophone African papers republish -- catching it
+    # upstream picks up stories before the local reprints appear.
+    ("https://news.google.com/rss/search?q=AFP+Afrique+s%C3%A9curit%C3%A9&hl=fr&gl=FR&ceid=FR:fr", 0.95, "news"),
+    # Sahel specialists -- thin outlets, high signal on exactly the theatres
+    # the English lane covers worst.
+    ("https://news.google.com/rss/search?q=site:sahelien.com&hl=fr&gl=FR&ceid=FR:fr",              0.95, "news"),
+    ("https://news.google.com/rss/search?q=site:studiotamani.org&hl=fr&gl=FR&ceid=FR:fr",          0.95, "news"),
+    # Francophone humanitarian / NGO
+    ("https://news.google.com/rss/search?q=site:reliefweb.int+Sahel&hl=fr&gl=FR&ceid=FR:fr",       1.0,  "ngos"),
+    ("https://news.google.com/rss/search?q=Sahel+humanitaire+d%C3%A9plac%C3%A9s&hl=fr&gl=FR&ceid=FR:fr", 0.95, "ngos"),
+    # Thematic francophone security sweep -- catches Sahel-wide stories that
+    # name no single country in the headline.
+    ("https://news.google.com/rss/search?q=Sahel+s%C3%A9curit%C3%A9+arm%C3%A9e&hl=fr&gl=FR&ceid=FR:fr", 0.9, "news"),
+    ("https://news.google.com/rss/search?q=Afrique+coup+d%27%C3%89tat+OR+junte&hl=fr&gl=FR&ceid=FR:fr",  0.9, "news"),
 ]
 
 

@@ -36,6 +36,9 @@ v2.0.0 — Jul 18 2026 — shared-channel cache + relevance gate + generic
                         dispatch; relevance terms for 20 countries
                         (14 launch + CAR, Chad, Eq. Guinea, Mozambique,
                         Madagascar, Guinea).
+v2.2.0 — Jul 26 2026 — Mali relevance gate widened (FLA/Africa Corps/
+                        blockade vocabulary); Mali channel candidates noted
+                        pending verification.
 v2.1.0 — Jul 19 2026 — gate WIDENED (demonyms + spelling variants: the
                         first production cycle kept 1 of 134 shared msgs;
                         demonym matching is how OSINT channels actually
@@ -96,6 +99,28 @@ COUNTRY_CHANNELS = {
         'sudanwatch',        # Sudan watch (English) -- resolves, low volume
     ],
     # Other countries fall through to shared channels only.
+    #
+    # ── MALI: candidate handles, UNVERIFIED (Jul 26 2026) ──────────────
+    # Mali's first production scan logged `dedicated=0 channels`. The
+    # candidates below are NOT enabled because they have not been checked,
+    # and this module's own history is the reason: 'sudaneseTribune' and
+    # 'DabangaSudan' were added unverified and pruned after UsernameInvalid
+    # appeared in production logs. A dead handle is worse than none -- it
+    # burns a fetch slot and logs noise every cycle.
+    #
+    # Verify each at t.me/s/<handle> (must load a PUBLIC preview), then move
+    # the line up into a 'mali': [...] entry:
+    #
+    #   'Sahel_Intelligence'   # Sahel-wide OSINT, FR/EN
+    #   'malijet'              # Malijet, national outlet
+    #   'studiotamani'         # Studio Tamani (Fondation Hirondelle)
+    #   'MENASTREAM'           # Sahel/Maghreb conflict specialist
+    #
+    # Note also that the same scan logged `shared gate kept 0, dropped 0` --
+    # zero shared messages were FETCHED at all that cycle, which is a
+    # different problem from the gate being too narrow. Worth checking the
+    # five SHARED_CHANNELS still resolve before assuming Mali needs its own.
+    #
     # Add dedicated handles here as they are verified
     # (check t.me/s/<handle> loads a public preview first).
 }
@@ -128,7 +153,15 @@ COUNTRY_RELEVANCE_TERMS = {
     'nigeria':      ['nigeria', 'nigerian', 'boko haram', 'iswap',
                      'abuja', 'niger delta'],
     'mali':         [' mali', ' malian', 'bamako', 'jnim', 'azawad',
-                     'kidal', 'goita', 'wagner mali'],
+                     'kidal', 'goita', 'wagner mali',
+                     # Widened Jul 26 2026 -- the terms above predate the FLA
+                     # rebrand, the Africa Corps transition and the Bamako
+                     # blockade, so the gate was matching on vocabulary the
+                     # channels have largely stopped using.
+                     'fla ', 'africa corps mali', 'gao ', 'mopti', 'anefis',
+                     'aguelhok', 'tinzaouaten', 'timbuktu', 'tombouctou',
+                     'sévaré', 'sevare', 'fama ', 'macina',
+                     'iyad ag ghaly', 'kouffa', 'malienne', 'maliens'],
     'niger':        ['niamey', 'tchiani', 'agadez', 'nigerien'],
     'burkina_faso': ['burkina', 'burkinabe', 'ouagadougou', 'traore'],
     'south_africa': ['south africa', 'south african', 'johannesburg',
