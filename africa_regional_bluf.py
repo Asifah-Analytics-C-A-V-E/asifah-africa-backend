@@ -88,7 +88,9 @@ UPSTASH_REDIS_TOKEN = (os.environ.get('UPSTASH_REDIS_TOKEN')
 TRACKER_KEYS = {
     'somalia': 'rhetoric:somalia:latest',   # v1.0 Jul 21 2026 -- junction tracker (first Africa tracker)
     'sudan':   'rhetoric:sudan:latest',     # v1.0 Jul 24 2026 -- hub tracker (Russia/UAE/SAF-patron plugs)
-    # 'mali':         'rhetoric:mali:latest',
+    'mali':    'rhetoric:mali:latest',      # v1.0 Jul 25 2026 -- Russia spoke + TRAJECTORY read
+                                            # (born with the gaining/losing vector; the Africa
+                                            #  Corps test case)
     # 'burkina_faso': 'rhetoric:burkina_faso:latest',
     # 'niger':        'rhetoric:niger:latest',
     # 'car':          'rhetoric:car:latest',
