@@ -67,6 +67,16 @@ import json
 import threading
 import time
 import requests
+
+# ── Shared trajectory reader (v1.0.0, Jul 25 2026) ────────────────────
+# Byte-identical across ALL backends. Answers the directional question the
+# wheel panel could not: is this hub GAINING or LOSING ground here?
+try:
+    from trajectory_reader import read_multi_hub as _read_multi_hub
+    _TRAJECTORY_AVAILABLE = True
+except ImportError:
+    _TRAJECTORY_AVAILABLE = False
+    print("[Sudan Rhetoric] trajectory_reader not available -- no directional read")
 from datetime import datetime, timezone, timedelta
 from flask import jsonify, request
 
@@ -1500,6 +1510,8 @@ def _write_crosstheater_signal(result, theatre_summary, humanitarian_read,
       2. rhetoric:crosstheater:fingerprints['sudan'] (collective; Africa BLUF)
       3. crosstheater:sudan:fingerprint              (canonical; Russia hub reads)
     (Key 1, rhetoric:sudan:latest, is written by the scan orchestrator.)"""
+    _tj = (result.get('trajectories') or {})
+    vectors = result.get('vector_levels', {}) or {}
     try:
         russia_plug, uae_axis, saf_patrons, spillover_south, spillover_west, \
             libya_haftar, peace_track = _build_spoke_reads(result, theatre_summary)
@@ -1526,7 +1538,17 @@ def _write_crosstheater_signal(result, theatre_summary, humanitarian_read,
             'actor_levels': actor_levels,
             'saf_silent': saf_silent,
             'rsf_silent': rsf_silent,
-            'russia_plug': russia_plug,
+            'russia_plug': dict(russia_plug, **{
+                'trajectory': _tj.get('russia', {}).get('direction', 'holding'),
+                'confidence': _tj.get('russia', {}).get('confidence', 'no_evidence'),
+            }),
+            'uae_spoke': {
+                'level': vectors.get('uae_axis', 0),
+                'trajectory': _tj.get('uae', {}).get('direction', 'holding'),
+                'confidence': _tj.get('uae', {}).get('confidence', 'no_evidence'),
+            },
+            'trajectories': _tj,
+            'contested_theatre': _tj.get('_contested', {}),
             'uae_axis': uae_axis,
             'saf_patrons': saf_patrons,
             'peace_track': peace_track,
@@ -1561,7 +1583,17 @@ def _write_crosstheater_signal(result, theatre_summary, humanitarian_read,
                 'libya_haftar':     theatre_summary.get('libya_haftar_max', 0),
             },
             'actor_levels': actor_levels,
-            'russia_plug': russia_plug,
+            'russia_plug': dict(russia_plug, **{
+                'trajectory': _tj.get('russia', {}).get('direction', 'holding'),
+                'confidence': _tj.get('russia', {}).get('confidence', 'no_evidence'),
+            }),
+            'uae_spoke': {
+                'level': vectors.get('uae_axis', 0),
+                'trajectory': _tj.get('uae', {}).get('direction', 'holding'),
+                'confidence': _tj.get('uae', {}).get('confidence', 'no_evidence'),
+            },
+            'trajectories': _tj,
+            'contested_theatre': _tj.get('_contested', {}),
             'uae_axis': uae_axis,
             'saf_patrons': saf_patrons,
             'peace_track': peace_track,
@@ -1724,6 +1756,29 @@ def run_sudan_rhetoric_scan(days=3):
 
     actor_results, theatre_summary = classify_articles(articles)
 
+    # ── TRAJECTORY (Jul 25 2026) ──────────────────────────────────────
+    # Sudan carries THREE hubs and is the platform's clearest EXPANDING case:
+    # the Port Sudan agreement is what a hub gaining ground looks like, which
+    # makes it the natural counterweight to Mali and Syria in the rollup.
+    _trajectories = {}
+    if _TRAJECTORY_AVAILABLE:
+        try:
+            _trajectories = _read_multi_hub(
+                articles, hubs=['russia', 'uae'], country='sudan',
+                extra_evidence={
+                    'russia': {'expanding': {'new_basing': [
+                                   'port sudan agreement', 'port sudan naval base',
+                                   'red sea base', '25-year agreement']},
+                               'contracting': {'basing_lost': [
+                                   'port sudan deal collapses',
+                                   'russia loses port sudan']}},
+                    'uae':    {'expanding': {'dependency_deepening': [
+                                   'uae rsf support', 'emirati weapons rsf',
+                                   'amdjarass airlift']}},
+                })
+        except Exception as _e:
+            print(f"[Sudan Rhetoric] Trajectory read failed (non-fatal): {str(_e)[:110]}")
+
     # Escalatory theatre level = max across ESCALATORY vectors (peace_track excluded)
     max_kinetic         = theatre_summary['kinetic_max']
     max_russia_plug     = theatre_summary['russia_plug_max']
@@ -1797,6 +1852,7 @@ def run_sudan_rhetoric_scan(days=3):
             'baseline': corpus_baseline,
             'note': corpus_note,
         },
+        'trajectories': _trajectories,
         'rhetoric_score': rhetoric_score,
         'theatre_escalation_level': theatre_escalation_level,
         'theatre_label': ESCALATION_LEVELS.get(theatre_escalation_level, {}).get('label', 'Unknown'),

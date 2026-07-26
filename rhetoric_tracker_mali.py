@@ -121,6 +121,18 @@ try:
 except ImportError:
     BLUESKY_AVAILABLE = False
 
+# ── Shared trajectory reader (v1.0.0, Jul 25 2026) ────────────────────
+# Mali shipped with an inline reader; it now defers to the SHARED module so
+# all four spokes score direction against ONE vocabulary. A phrase counting as
+# 'territory_lost' in Mali must count as 'territory_lost' in Syria, or the
+# cross-spoke rollup compares nothing to nothing.
+try:
+    from trajectory_reader import read_trajectory as _shared_read_trajectory
+    _TRAJECTORY_SHARED = True
+except ImportError:
+    _TRAJECTORY_SHARED = False
+    print("[Mali Rhetoric] trajectory_reader not available -- using inline reader")
+
 # Standing rule (Jul 24 2026): wire the gateway at birth in every NEW tracker.
 try:
     from gdelt_gateway import gdelt_fetch as _gw_gdelt_fetch
@@ -827,6 +839,24 @@ _VECTOR_MAP = [
 
 
 def _read_trajectory(articles):
+    """Defers to the shared reader when present; the inline implementation
+    below is the fallback so Mali still works on a backend that has not yet
+    received trajectory_reader.py."""
+    if _TRAJECTORY_SHARED:
+        try:
+            return _shared_read_trajectory(
+                articles, hub='russia', country='mali',
+                extra_evidence={'contracting': {'territory_lost': [
+                                    'kidal falls', 'kidal seized', 'anefis seized',
+                                    'aguelhok seized']},
+                                'expanding': {'rival_expelled': [
+                                    'minusma withdrawal', 'france expelled']}})
+        except Exception as _e:
+            print(f"[Mali Rhetoric] Shared trajectory failed, using inline: {str(_e)[:90]}")
+    return _read_trajectory_inline(articles)
+
+
+def _read_trajectory_inline(articles):
     """THE NEW VECTOR. Is the hub gaining, holding, or losing ground here?
 
     Read from EVIDENCE CLASSES, never inferred from a level -- "Russia is lit
