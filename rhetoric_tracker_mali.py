@@ -824,6 +824,152 @@ def fetch_rhetoric_articles(days=3):
     return deduped
 
 
+
+
+# ============================================
+# CORPUS HEALTH / BASELINES / DELTA
+# ============================================
+# Reused verbatim from the proven Sudan tracker (localised). These were
+# missed in the initial block extraction -- section-header slicing dropped
+# them, which is why the first force scan raised NameError instead of
+# failing at import. Extracted by AST function name this time.
+
+CORPUS_DEGRADED_RATIO = 0.40  # below 40% of rolling baseline = degraded, flag it
+
+
+def _detect_silence_anomalies(actor_results, baselines):
+    """Flag claiming actors (SAF, RSF) whose statement count falls far below
+    baseline. Silence after tempo = pre-operational signal.
+    Threshold: actual < 30% of baseline avg (baseline avg > 3, >=5 scans)."""
+    anomalies = []
+    try:
+        for actor_id, ar in actor_results.items():
+            if ACTORS.get(actor_id, {}).get('mode') != 'actor':
+                continue
+            baseline = baselines.get(actor_id, {})
+            avg_statements = baseline.get('avg_statements', 0)
+            scans = baseline.get('scans', 0)
+            if scans < 5 or avg_statements < 3:
+                continue
+            actual = ar.get('statement_count', 0)
+            if actual < avg_statements * 0.30:
+                pct_below = round((1 - actual / avg_statements) * 100)
+                info = ACTORS.get(actor_id, {})
+                anomalies.append({
+                    'actor_id': actor_id,
+                    'actor_name': info.get('name', actor_id),
+                    'actor_flag': info.get('flag', ''),
+                    'expected_statements': round(avg_statements),
+                    'actual_statements': actual,
+                    'deviation': f'{pct_below}% below baseline',
+                    'signal': 'Unusual quiet from a claiming actor — consistent with '
+                              'operational security ahead of activity (silence-is-signal)',
+                })
+                print(f"[Mali Rhetoric] \U0001F507 Silence anomaly: {actor_id} "
+                      f"({actual} vs avg {avg_statements:.1f})")
+    except Exception as e:
+        print(f"[Mali Rhetoric] Silence detection error: {str(e)[:80]}")
+    return anomalies
+
+
+def _update_actor_baselines(actor_results):
+    """Rolling statement-count baseline per actor. Absence-honest until MIN."""
+    BASELINE_KEY = 'rhetoric:mali:baselines'
+    try:
+        baselines = _redis_get(BASELINE_KEY) or {}
+        for actor_id, ar in actor_results.items():
+            b = baselines.get(actor_id, {'avg_statements': 0, 'scans': 0})
+            count = ar.get('statement_count', 0)
+            n = b['scans']
+            new_avg = (b['avg_statements'] * n + count) / (n + 1) if n < 30 else \
+                      (b['avg_statements'] * 0.9 + count * 0.1)
+            baselines[actor_id] = {
+                'avg_statements': round(new_avg, 2),
+                'scans': min(n + 1, 999),
+                'last_count': count,
+            }
+        _redis_set(BASELINE_KEY, baselines, ttl=60 * 24 * 3600)  # 60d
+        return baselines
+    except Exception as e:
+        print(f"[Mali Rhetoric] Baseline update error: {str(e)[:80]}")
+        return {}
+
+
+def _compute_delta():
+    """Compute score/level delta vs the previous history snapshot."""
+    try:
+        if not (UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN):
+            return None
+        resp = requests.get(
+            f"{UPSTASH_REDIS_URL}/lrange/{HISTORY_KEY}/0/1",
+            headers={"Authorization": f"Bearer {UPSTASH_REDIS_TOKEN}"},
+            timeout=5)
+        data = resp.json().get('result', [])
+        if not data or len(data) < 2:
+            return None
+        current = json.loads(data[0])
+        previous = json.loads(data[1])
+        return {
+            'score_delta': current.get('score', 0) - previous.get('score', 0),
+            'level_delta': current.get('level', 0) - previous.get('level', 0),
+            'previous_score': previous.get('score', 0),
+            'previous_ts': previous.get('ts', ''),
+        }
+    except Exception as e:
+        print(f"[Mali Rhetoric] Delta error: {str(e)[:80]}")
+        return None
+
+
+def _assess_corpus_health(article_count):
+    """Compare this scan's corpus against a rolling baseline.
+
+    Returns (status, baseline, note) where status is 'ok' | 'degraded' | 'outage'.
+    Absence-honest: with fewer than 3 recorded scans there is no baseline yet,
+    so only the absolute floor applies and we say the baseline is accumulating.
+    """
+    try:
+        b = _redis_get(CORPUS_BASELINE_KEY) or {'avg': 0, 'scans': 0}
+        avg, scans = b.get('avg', 0), b.get('scans', 0)
+
+        if article_count < CORPUS_MIN_ABSOLUTE:
+            return ('outage', avg,
+                    'Corpus collapsed to %d articles (floor is %d). Treating as a feed '
+                    'outage, not a quiet cycle -- scores are NOT published from this scan.'
+                    % (article_count, CORPUS_MIN_ABSOLUTE))
+
+        if scans >= 3 and avg > 0 and article_count < avg * CORPUS_DEGRADED_RATIO:
+            return ('degraded', avg,
+                    'Corpus at %d articles vs a rolling baseline of %.0f (%.0f%%). Scores '
+                    'published but read as a floor, not a ceiling -- quiet here may be the '
+                    'feeds, not the theatre.'
+                    % (article_count, avg, 100.0 * article_count / avg))
+
+        note = ('Baseline accumulating (%d scan(s) recorded).' % scans) if scans < 3 else \
+               ('Corpus healthy: %d articles vs baseline %.0f.' % (article_count, avg))
+        return ('ok', avg, note)
+    except Exception as e:
+        print(f"[Mali Rhetoric] Corpus health check error: {str(e)[:90]}")
+        return ('ok', 0, 'Corpus health unavailable this cycle.')
+
+
+def _update_corpus_baseline(article_count):
+    """Roll the corpus-size baseline forward. Outage scans are NOT recorded --
+    a failed fetch must not drag the denominator down and normalise itself."""
+    try:
+        if article_count < CORPUS_MIN_ABSOLUTE:
+            return
+        b = _redis_get(CORPUS_BASELINE_KEY) or {'avg': 0, 'scans': 0}
+        n = b.get('scans', 0)
+        avg = b.get('avg', 0)
+        new_avg = (avg * n + article_count) / (n + 1) if n < 30 else (avg * 0.9 + article_count * 0.1)
+        _redis_set(CORPUS_BASELINE_KEY,
+                   {'avg': round(new_avg, 1), 'scans': min(n + 1, 999),
+                    'last_count': article_count},
+                   ttl=60 * 24 * 3600)
+    except Exception as e:
+        print(f"[Mali Rhetoric] Corpus baseline update error: {str(e)[:90]}")
+
+
 # ============================================
 # CLASSIFIER
 # ============================================
