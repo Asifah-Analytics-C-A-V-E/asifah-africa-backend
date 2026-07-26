@@ -129,6 +129,14 @@ except ImportError as e:
     print(f"[Africa] ⚠️ sudan_humanitarian not available: {e}")
 
 try:
+    from mali_humanitarian import register_mali_humanitarian_endpoints
+    MALI_HUMANITARIAN_AVAILABLE = True
+    print("[Africa] ✅ mali_humanitarian loaded")
+except ImportError as e:
+    MALI_HUMANITARIAN_AVAILABLE = False
+    print(f"[Africa] ⚠️ mali_humanitarian not available: {e}")
+
+try:
     from rhetoric_tracker_somalia import register_somalia_rhetoric_routes
     SOMALIA_RHETORIC_AVAILABLE = True
     print("[Africa] ✅ rhetoric_tracker_somalia loaded")
@@ -149,6 +157,17 @@ try:
 except ImportError as e:
     SUDAN_RHETORIC_AVAILABLE = False
     print(f"[Africa] ⚠️ rhetoric_tracker_sudan not yet available: {e}")
+
+try:
+    from rhetoric_tracker_mali import (
+        register_mali_rhetoric_endpoints,
+        start_background_refresh as start_mali_rhetoric_refresh,
+    )
+    MALI_RHETORIC_AVAILABLE = True
+    print("[Africa] ✅ rhetoric_tracker_mali loaded")
+except ImportError as e:
+    MALI_RHETORIC_AVAILABLE = False
+    print(f"[Africa] ⚠️ rhetoric_tracker_mali not yet available: {e}")
 
 try:
     from africa_regional_bluf import register_africa_bluf_routes
@@ -2425,6 +2444,12 @@ if SUDAN_HUMANITARIAN_AVAILABLE:
     except Exception as e:
         print(f'[Africa] ⚠️ Sudan humanitarian registration failed: {e}')
 
+if MALI_HUMANITARIAN_AVAILABLE:
+    try:
+        register_mali_humanitarian_endpoints(app)
+    except Exception as e:
+        print(f'[Africa] ⚠️ Mali humanitarian registration failed: {e}')
+
 if SOMALIA_RHETORIC_AVAILABLE:
     try:
         register_somalia_rhetoric_routes(app, start_background=True)
@@ -2438,6 +2463,14 @@ if SUDAN_RHETORIC_AVAILABLE:
         print('[Africa] ✅ Sudan rhetoric endpoints registered')
     except Exception as e:
         print(f'[Africa] ⚠️ Sudan rhetoric registration failed: {e}')
+
+if MALI_RHETORIC_AVAILABLE:
+    try:
+        register_mali_rhetoric_endpoints(app)
+        start_mali_rhetoric_refresh()
+        print('[Africa] ✅ Mali rhetoric endpoints registered')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Mali rhetoric registration failed: {e}')
 
 if AFRICA_BLUF_AVAILABLE:
     try:
