@@ -493,14 +493,23 @@ def fetch_brave_news(query, count=20, freshness='pw', search_lang='en', country=
         raw = _gw_brave(query, count=count, freshness=freshness,
                         search_lang=search_lang, country=country,
                         label='africa/brave') or []
-        return [{
-            'title':       a.get('title', '') or '',
-            'description': a.get('description', '') or '',
-            'url':         a.get('url', '') or '',
-            'published':   a.get('published', '') or '',
-            'source':      a.get('source') or 'Brave',
-            'query':       query,
-        } for a in raw]
+        out = []
+        for a in raw:
+            # The gateway returns source as {'name': hostname}; this file's
+            # own dialect wants a plain string. Getting this wrong ships a
+            # dict into the source-weighting and SOCIAL_SOURCE_HINTS checks.
+            _src = a.get('source')
+            if isinstance(_src, dict):
+                _src = _src.get('name') or 'Brave'
+            out.append({
+                'title':       a.get('title', '') or '',
+                'description': a.get('description', '') or '',
+                'url':         a.get('url', '') or '',
+                'published':   a.get('published', '') or a.get('publishedAt', '') or '',
+                'source':      _src or 'Brave',
+                'query':       query,
+            })
+        return out
     try:
         r = requests.get(
             'https://api.search.brave.com/res/v1/news/search',
