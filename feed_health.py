@@ -213,11 +213,22 @@ def classify(rec):
                 '%d consecutive failed fetches. Last: %s'
                 % (rec['consecutive_failed'], rec.get('last_error')))
 
-    if since_ok is None or since_ok > DEAD_DAYS:
+    if since_ok is None:
+        # Never once reached. Two attempts is not a verdict -- a feed added
+        # an hour ago and a feed retired last month must not read the same.
+        if rec.get('checks', 0) < 3:
+            return ('failing',
+                    'Never successfully reached, but only %d attempt(s) so far '
+                    '-- too early to call it dead. Last error: %s'
+                    % (rec.get('checks', 0), rec.get('last_error') or 'none recorded'))
         return ('dead',
-                'Not successfully reached in %s. Last error: %s'
-                % ('%.1f days' % since_ok if since_ok is not None else 'ever',
-                   rec.get('last_error') or 'none recorded'))
+                'Never successfully reached in %d attempts. Last error: %s'
+                % (rec.get('checks', 0), rec.get('last_error') or 'none recorded'))
+
+    if since_ok > DEAD_DAYS:
+        return ('dead',
+                'Not successfully reached in %.1f days. Last error: %s'
+                % (since_ok, rec.get('last_error') or 'none recorded'))
 
     if rec.get('items_total', 0) == 0 and rec.get('checks', 0) >= 3:
         return ('never_worked',
