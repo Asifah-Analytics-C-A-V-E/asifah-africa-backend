@@ -340,6 +340,33 @@ except ImportError:
     print("[Africa GDELT] gdelt_gateway not available -- using direct GDELT calls")
     _GDELT_GATEWAY = False
 
+# ── Shared Brave gateway (Sep 27 2026) ────────────────────────────────
+# Africa's GDELT was routed in July; its BRAVE was not, so this backend
+# has been spending from the shared 2000/month plan without appearing in
+# any budget, and without standing down when Brave answers 402 (which it
+# did on Sep 12, platform-wide). One daily budget, spend attributed.
+try:
+    from brave_gateway import brave_fetch as _gw_brave, brave_stats as _gw_brave_stats
+    _BRAVE_GATEWAY = True
+    print("[Africa Brave] Shared Brave gateway loaded (daily budget enforced)")
+except ImportError:
+    print("[Africa Brave] brave_gateway not available -- direct calls, NO shared budget")
+    _gw_brave = None
+    _gw_brave_stats = None
+    _BRAVE_GATEWAY = False
+
+# ── Feed health (Sep 27 2026) ─────────────────────────────────────────
+# Every RSS fetch reports its outcome so a retired feed announces itself
+# instead of quietly shrinking the corpus (feeds.reuters.com, Sep 2026).
+try:
+    from feed_health import record_fetch as _feed_record, feed_report as _feed_report
+    _FEED_HEALTH = True
+except ImportError:
+    _feed_record = None
+    _feed_report = None
+    _FEED_HEALTH = False
+    print("[Africa RSS] feed_health not available -- feed deaths will be silent")
+
 
 def _reset_gdelt_circuit():
     global _gdelt_failed_this_scan
@@ -453,9 +480,27 @@ def fetch_newsapi(query, days=7):
 # ============================================================
 
 def fetch_brave_news(query, count=20, freshness='pw', search_lang='en', country='us'):
-    """Brave Search News API. Free tier: ~1 req/sec, 2000/month."""
+    """Brave Search News API. Free tier: ~1 req/sec, 2000/month.
+
+    v1.1 (Sep 27 2026): routed through brave_gateway when present, so this
+    backend's spend counts against the same daily budget as every other
+    repo and a 402 stands the whole platform down at once. The direct path
+    below is the fallback for a backend without the module.
+    """
     if not BRAVE_API_KEY:
         return []
+    if _BRAVE_GATEWAY and _gw_brave:
+        raw = _gw_brave(query, count=count, freshness=freshness,
+                        search_lang=search_lang, country=country,
+                        label='africa/brave') or []
+        return [{
+            'title':       a.get('title', '') or '',
+            'description': a.get('description', '') or '',
+            'url':         a.get('url', '') or '',
+            'published':   a.get('published', '') or '',
+            'source':      a.get('source') or 'Brave',
+            'query':       query,
+        } for a in raw]
     try:
         r = requests.get(
             'https://api.search.brave.com/res/v1/news/search',
@@ -498,7 +543,8 @@ def fetch_brave_news(query, count=20, freshness='pw', search_lang='en', country=
 # ============================================================
 
 def fetch_rss(feed_url, max_items=15):
-    """Fetch and parse an RSS feed."""
+    """Fetch and parse an RSS feed. Reports its outcome to feed_health."""
+    _t0 = time.time()
     try:
         import feedparser
         feed = feedparser.parse(feed_url, request_headers={
@@ -514,9 +560,21 @@ def fetch_rss(feed_url, max_items=15):
                 'source':      feed_url,
                 'query':       'rss',
             })
+        if _feed_record:
+            # feedparser swallows transport errors into feed.bozo -- a dead
+            # host and an empty feed both arrive here as zero entries, so
+            # pass the bozo exception through as the error when present.
+            _bozo = getattr(feed, 'bozo_exception', None) if getattr(feed, 'bozo', 0) else None
+            _feed_record('africa', feed_url, items=len(out),
+                         http_status=getattr(feed, 'status', None),
+                         error=_bozo,
+                         duration_ms=(time.time() - _t0) * 1000)
         return out
     except Exception as e:
         print(f'[Africa RSS] {feed_url[:80]} error: {str(e)[:80]}')
+        if _feed_record:
+            _feed_record('africa', feed_url, items=0, error=e,
+                         duration_ms=(time.time() - _t0) * 1000)
         return []
 
 
@@ -1749,7 +1807,18 @@ def health():
             'article_gatherer':       ARTICLE_GATHERER_AVAILABLE,
             'sudan_rhetoric':         SUDAN_RHETORIC_AVAILABLE,
             'africa_regional_bluf':   AFRICA_BLUF_AVAILABLE,
+            'brave_gateway':          _BRAVE_GATEWAY,
+            'gdelt_gateway':          _GDELT_GATEWAY,
+            'feed_health':            _FEED_HEALTH,
         },
+        # Sep 27 2026 -- feeds report their own silence. 'needs_attention'
+        # is the list to read; 'summary' is the one to alert on.
+        'feeds': (_feed_report('africa') if _feed_report else
+                  {'state': 'could_not_assess',
+                   'reason': 'feed_health module not installed'}),
+        'brave_budget': (_gw_brave_stats() if _gw_brave_stats else
+                         {'note': 'brave_gateway not installed -- '
+                                  'spend is uncapped and unattributed'}),
     })
 
 
