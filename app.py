@@ -208,6 +208,17 @@ CACHE_TTL_HOURS    = 12
 SCAN_TIMEOUT_SEC   = 90        # max scan time per country before bailing out
 RENDER_DEPLOY_TAG  = 'asifa-africa-backend'
 
+# v1.3.1 (Oct 3 2026) -- ONE version, ONE User-Agent.
+# This backend was reporting three different versions: the '/' route said
+# 1.0.0, the scan payload said 1.3.0, the User-Agent said 1.0, and the
+# module docstring said 1.0.0 while itself describing a v1.1 expansion from
+# July. A version that disagrees with itself cannot answer "which build is
+# live?", which is the only question it exists to answer.
+# Both now derive from this line. Bump it here and every surface follows.
+AFRICA_BACKEND_VERSION = '1.3.1'
+ASIFAH_USER_AGENT = (f"AsifahAnalytics-AF/{AFRICA_BACKEND_VERSION} "
+                     f"(OSINT monitoring tool; +https://asifahanalytics.com)")
+
 # /tmp fallback cache directory
 FILE_CACHE_DIR = Path('/tmp/africa_cache')
 FILE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -406,7 +417,7 @@ def fetch_gdelt(query, days=7, language='eng', max_records=50):
             GDELT_BASE_URL,
             params=params,
             timeout=8,
-            headers={'User-Agent': 'AsifahAnalytics/1.0 (+https://asifahanalytics.com)'},
+            headers={'User-Agent': ASIFAH_USER_AGENT},
         )
         if r.status_code == 429:
             print(f'[Africa GDELT] 429 rate limit -- skipping: {query[:80]}')
@@ -516,7 +527,7 @@ def fetch_brave_news(query, count=20, freshness='pw', search_lang='en', country=
             headers={
                 'Accept':                 'application/json',
                 'X-Subscription-Token':   BRAVE_API_KEY,
-                'User-Agent':             'AsifahAnalytics/1.0',
+                'User-Agent':             ASIFAH_USER_AGENT,
             },
             params={
                 'q':                query,
@@ -557,7 +568,7 @@ def fetch_rss(feed_url, max_items=15):
     try:
         import feedparser
         feed = feedparser.parse(feed_url, request_headers={
-            'User-Agent': 'AsifahAnalytics/1.0 (+https://asifahanalytics.com)'
+        'User-Agent': ASIFAH_USER_AGENT
         })
         out = []
         for entry in (feed.entries or [])[:max_items]:
@@ -1736,7 +1747,7 @@ def scan_country(country_id, days=7):
         'top_articles':            all_articles[:30],   # cap to avoid bloat
         'cached_at':               datetime.now(timezone.utc).isoformat(),
         'scan_duration_sec':       elapsed,
-        'backend_version':         '1.3.0',
+        'backend_version':         AFRICA_BACKEND_VERSION,
         'cache_status':            'fresh',
     }
 
@@ -1792,7 +1803,7 @@ def _start_background_refresh():
 def root():
     return jsonify({
         'service':       'asifah-africa-backend',
-        'version':       '1.0.0',
+        'version':       AFRICA_BACKEND_VERSION,
         'theatre':       'Africa / AFRICOM',
         'countries':     list(COUNTRY_CONFIG.keys()),
         'country_count': len(COUNTRY_CONFIG),
