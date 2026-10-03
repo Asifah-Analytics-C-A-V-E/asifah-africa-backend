@@ -186,6 +186,26 @@ ESCALATION_COLORS = {
     5: '#7c3aed',
 }
 
+# ── PLAIN-LANGUAGE STATE VOCABULARY (Oct 3 2026) ─────────────────────
+# ESCALATION_LABELS above is CHIP language -- it labels a pill next to a
+# legend. It is wrong for PROSE, where "peak escalation L4" tells a reader
+# who has never seen this platform precisely nothing.
+#
+# theatre_state.py carries the axis-aware vocabulary (a magnitude-9
+# earthquake is a legitimate L5, and calling it "active war footing" is not
+# imprecise, it is false). Rule: the state phrase LEADS, the level follows
+# in parentheses. Fails soft -- missing module keeps the old shape rather
+# than blanking the page.
+try:
+    from theatre_state import state_with_level as _ts_level, named_state as _ts_named
+except ImportError:
+    def _ts_level(level, category=None, pressure_type=None, upper=False):
+        return 'L%s' % level
+    def _ts_named(name, level, category=None, pressure_type=None):
+        return '%s (L%s)' % (name, level)
+
+
+
 
 # ============================================================
 # REDIS HELPERS
@@ -522,15 +542,15 @@ def _build_bluf_prose(posture, trackers, missing):
         label   = ESCALATION_LABELS.get(lvl, 'Unknown')
         score   = data.get('score', 0)
 
-        parts.append('%s carries the Africa read at L%d (%s), composite %s/100.'
-                     % (display, lvl, label, score))
+        parts.append('%s carries the Africa read at %s, composite %s/100.'
+                     % (display, _ts_level(lvl), score))
 
         # Hottest vectors -- names the drivers rather than asserting a cause
         vl = data.get('vector_levels', {}) or {}
         hot = sorted(((k, _safe_int(v)) for k, v in vl.items() if _safe_int(v) >= 3),
                      key=lambda kv: kv[1], reverse=True)
         if hot:
-            names = ', '.join('%s L%d' % (k.replace('_', ' '), v) for k, v in hot[:4])
+            names = ', '.join(_ts_named(k.replace('_', ' '), v) for k, v in hot[:4])
             parts.append('Lead vectors: %s.' % names)
 
         # Junction read -- the marquee
@@ -573,19 +593,19 @@ def _build_bluf_prose(posture, trackers, missing):
                     reverse=True)
     lead = ranked[0]
     lead_display = THEATRE_DISPLAY.get(lead[0], lead[0].upper())
-    parts.append('%s leads at L%d (%s), composite %s/100.'
-                 % (lead_display, lead[1]['levels']['threat'],
-                    ESCALATION_LABELS.get(lead[1]['levels']['threat'], 'Unknown'),
+    parts.append('%s leads at %s, composite %s/100.'
+                 % (lead_display, _ts_level(lead[1]['levels']['threat']),
                     lead[1].get('score', 0)))
 
     if len(ranked) > 1:
-        others = '; '.join('%s L%d' % (THEATRE_DISPLAY.get(t, t.upper()),
-                                       d['levels']['threat'])
+        others = '; '.join(_ts_named(THEATRE_DISPLAY.get(t, t.upper()),
+                                    d['levels']['threat'])
                            for t, d in ranked[1:5])
         parts.append('Also live: %s.' % others)
 
     if posture['theatres_at_l3plus'] >= 2:
-        parts.append('%d countries at L3+ simultaneously -- breadth, not a single '
+        parts.append('%d countries at standoff hardening or above simultaneously -- '
+                     'breadth, not a single '
                      'hotspot, is carrying the regional read.'
                      % posture['theatres_at_l3plus'])
 
