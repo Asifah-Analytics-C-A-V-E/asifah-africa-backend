@@ -1,88 +1,86 @@
 ASIFAH ANALYTICS — PROPRIETARY LICENSE
-========================================
 
-Copyright (c) 2025-2026 RCGG / Asifah Analytics. All rights reserved.
+Copyright (c) 2025–2026 RCGG. All rights reserved.
 
-asifahanalytics.com
+This file governs the source code, documentation and other materials in this
+repository (the "Software"). It is identical across every Asifah Analytics
+repository.
 
-────────────────────────────────────────────────────────────────────
 
-NOTICE
+1. OWNERSHIP
 
-This repository contains source code, configuration, analytical
-methodology, and editorial output (collectively, "the Materials")
-authored and maintained by RCGG / Asifah Analytics ("the Author").
+The Software is proprietary. All rights not expressly granted below are
+reserved by the copyright holder.
 
-The Materials are made viewable for transparency, replication of
-research, and independent verification of analytical reasoning.
 
-NOT FOR OPERATIONAL USE.
+2. WHAT YOU MAY DO
 
-The Materials are provided for analytical, academic, and research
-purposes only. They are not intended for, nor licensed for, use in:
+This repository is published publicly. You may read, view and study the
+Software, and you may exercise the rights that the hosting platform's terms of
+service grant to all users of a public repository, including forking within
+that platform.
 
-  - tactical, operational, or kinetic decision-making
-  - investment, financial, or trading decisions
-  - intelligence-cycle products of any government, military, or
-    commercial entity
-  - any decision in which a reasonable person would expect a
-    professionally licensed analyst, lawyer, financial advisor, or
-    medical practitioner to be consulted
 
-────────────────────────────────────────────────────────────────────
+3. WHAT YOU MAY NOT DO WITHOUT PRIOR WRITTEN PERMISSION
 
-PERMISSIONS
+- Copy or reproduce the source code outside the hosting platform
+- Modify the Software or create derivative works from it
+- Distribute, publish, sublicense or sell the Software
+- Use the Software, in whole or in part, for any commercial purpose
+- Deploy or host an instance of this service
+- Incorporate the Software into another product or service
 
-The following are PERMITTED without separate license:
 
-  (a) Reading, studying, and discussing the source code and
-      methodology for personal, academic, or journalistic purposes.
-  (b) Linking to public Asifah Analytics output at
-      asifahanalytics.com from any non-commercial context.
-  (c) Quoting short excerpts of analytical output (under 100 words
-      per quotation) with attribution to "Asifah Analytics" and a
-      link to asifahanalytics.com.
+4. THIRD-PARTY DATA
 
-The following REQUIRE prior written permission from the Author:
+The Software retrieves data from third-party sources, including news,
+event-database, market, humanitarian and social-media providers. That data is
+not owned by the copyright holder and remains subject to the terms of its
+respective providers. Nothing in this licence grants any right to that data,
+and anyone using the Software is responsible for complying with those
+providers' terms.
 
-  (a) Redistribution of the source code, in whole or part, modified
-      or unmodified, including via forking, mirroring, or
-      derivative works.
-  (b) Commercial use of the Materials or any derivative product.
-  (c) Integration of the Materials into any commercial intelligence
-      product, terminal, or platform.
-  (d) Republication of more than 100 words of analytical output in
-      a single context.
 
-The following are PROHIBITED:
+5. NO WARRANTY
 
-  (a) Use of the Materials in any product or workflow that supports
-      kinetic targeting, surveillance of identifiable individuals,
-      or operational planning of any kind.
-  (b) Removal or modification of attribution.
-  (c) Misrepresentation of the analytical positions, conclusions,
-      or editorial voice of Asifah Analytics.
+THE SOFTWARE AND ANY OUTPUT IT PRODUCES ARE PROVIDED "AS IS", WITHOUT WARRANTY
+OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, ACCURACY, AND
+NON-INFRINGEMENT.
 
-────────────────────────────────────────────────────────────────────
 
-NO WARRANTY
+6. LIMITATION OF LIABILITY
 
-THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
-CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
-CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
-CONNECTION WITH THE MATERIALS OR THE USE OR OTHER DEALINGS IN THE
-MATERIALS.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE, ITS OUTPUT, OR ANY USE OF OR
+RELIANCE ON EITHER.
 
-────────────────────────────────────────────────────────────────────
 
-CONTACT
+7. NATURE OF THE OUTPUT
 
-For licensing inquiries, redistribution requests, or commercial use
-permissions, please contact the Author via asifahanalytics.com.
+The Software aggregates and classifies publicly available reporting. Its output
+indicates convergence among observed signals. It is not a forecast, not a
+probability of any event occurring, and not operational intelligence. It is not
+suitable for operational, safety-of-life, financial, legal or travel decisions.
+Anyone relying on it does so at their own risk.
 
-────────────────────────────────────────────────────────────────────
 
-End of License.
+8. NO AFFILIATION
+
+Asifah Analytics is an independent personal project. It is not affiliated with,
+endorsed by, sponsored by, or produced on behalf of any government, agency,
+institution or employer, and it does not represent the position or assessment of
+any of them.
+
+
+9. DONATIONS
+
+Voluntary contributions support hosting and running costs. They are gifts. They
+confer no licence, no warranty, no support obligation, no service-level
+commitment and no influence over the Software or its output.
+
+
+10. CONTACT
+
+Licensing inquiries and permission requests: asifahanalytics@gmail.com
