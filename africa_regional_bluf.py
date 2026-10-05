@@ -1,6 +1,8 @@
 """
 Asifah Analytics -- Africa Regional BLUF Engine
-v1.0.0 -- July 23 2026  |  Africa backend
+v1.1.0 -- Oct 5 2026  |  Africa backend
+  (v1.0.0 Jul 23 2026; v1.1.0 adds the TRAJECTORY pass-through -- see
+   "WHAT MAKES AFRICA DIFFERENT" item 4 below)
 
 Layer 3 in the platform stack: sensors (country trackers) -> analyst (this) ->
 global (GPI). Reads every Africa country tracker cache, rolls them into a single
@@ -33,6 +35,14 @@ WHAT MAKES AFRICA DIFFERENT (three deliberate divergences from Europe)
    (mode='actor': al-Shabaab, ISIS-Somalia) where SILENCE IS THE SIGNAL. A
    claiming actor going quiet against its own baseline is surfaced as a signal
    class Europe has no equivalent for.
+
+4. DIRECTION-AWARE (v1.1.0, Oct 5 2026). Every other regional BLUF can say a
+   patron is PRESENT. Africa can now say which way that presence is MOVING.
+   The Sudan and Mali trackers have emitted a trajectory read since July; this
+   module read right past it until now. Rolled up, a patron contracting in two
+   countries at once is a regional question the presence read cannot pose.
+   Gated on confidence, because the Sahel corpus is largely interested-party
+   claims. Trackers with no trajectory sensor are UNREAD, never 'holding'.
 
 ═══════════════════════════════════════════════════════════════════════
 DOCTRINE
@@ -76,6 +86,11 @@ except ImportError:
 # ============================================================
 # CONFIG
 # ============================================================
+# ONE version string, read by the payload, the debug route and every log line.
+# Three hand-maintained copies is how this file spent weeks reporting v1.0.0
+# in /debug while the payload said v1.0.1.
+MODULE_VERSION = '1.1.0'
+
 UPSTASH_REDIS_URL   = (os.environ.get('UPSTASH_REDIS_URL')
                        or os.environ.get('UPSTASH_REDIS_REST_URL') or '')
 UPSTASH_REDIS_TOKEN = (os.environ.get('UPSTASH_REDIS_TOKEN')
@@ -303,6 +318,134 @@ def _safe_str(val, default=''):
 
 
 # ============================================================
+# TRAJECTORY NORMALIZATION  (v1.1.0 -- Oct 5 2026)
+# ============================================================
+# WHY THIS EXISTS
+# The Sudan tracker (Jul 24 2026) and the Mali tracker (Jul 25 2026) have been
+# emitting a DIRECTIONAL read -- is a patron gaining or losing here -- into the
+# very caches this module reads, and this module threw it away at the
+# normalizer. One writer, zero readers, for ten weeks.
+#
+# Every wheel panel on this platform answers ONE question: is the spoke LIT.
+# None of them can tell Port Sudan (a patron EXPANDING) from Kidal (a patron
+# CONTRACTING) -- opposite findings rendered identically. This block is the
+# pass-through that makes the difference visible.
+#
+# TWO SHAPES, ONE OUTPUT
+#   Mali  -> raw['trajectory']   flat payload, single hub  {'hub':'russia',...}
+#   Sudan -> raw['trajectories'] dict keyed by hub         {'russia':{...},
+#                                'uae':{...}, '_contested':{...}}
+# Somalia emits neither, and that is CORRECT -- it is a Turkey/Bab-el-Mandeb
+# junction, not a Russia spoke.
+#
+# 'holding' IS NOT 'unread'. A tracker with no directional reader returns None
+# here and lands in trajectory_unread. Defaulting it to 'holding' would invent
+# a sensor reading out of a missing module, and claim Russia was stable in
+# Somalia on the strength of nobody having looked.
+TRAJECTORY_DIRECTIONS = ('contracting', 'expanding', 'holding')
+
+# Confidence ladder emitted by trajectory_reader.py:
+#   multi_source       >=2 confirming outlets (Reuters/AFP/ACLED/Crisis Group)
+#   confirmed_partial   1 confirming outlet
+#   claim_sourced       interested-party claim only (FLA/JNIM via OSINT relays)
+#   no_evidence         nothing matched
+TRAJECTORY_CONFIDENCE_RANK = {
+    'multi_source':      3,
+    'confirmed_partial': 2,
+    'claim_sourced':     1,
+    'no_evidence':       0,
+}
+
+# A country reading must reach THIS rank to count toward a regional
+# convergence. Much of the Sahel corpus is FLA/JNIM claims amplified through
+# pro-Ukraine OSINT accounts; a "Russia is collapsing across the Sahel" read
+# built on an interested party's unverified claims will say exactly what that
+# party wants it to say. Claim-only patterns are NOT suppressed -- they surface
+# separately and are labelled as claims. Drop this to 1 only if you also change
+# the signal prose to lead with "claimed".
+TRAJECTORY_MIN_CONFIDENCE_RANK = 2
+
+# How many countries must move the SAME patron the SAME way before it is a
+# regional read. Russia bleeding in Mali while the UAE expands in Sudan is two
+# facts, not a pattern.
+TRAJECTORY_CONVERGENCE_MIN = 2
+
+TRAJECTORY_DEFAULT_CAVEAT = (
+    'Trajectory reads reporting, not ground truth. A patron losing ground with '
+    'nobody reporting it registers as HOLDING -- quiet is not the same as '
+    'stable, and this sensor cannot tell them apart.'
+)
+
+
+def _confidence_rank(conf):
+    return TRAJECTORY_CONFIDENCE_RANK.get(str(conf or '').lower(), 0)
+
+
+def _normalize_trajectory(raw_data):
+    """Return {'by_hub': {hub: payload}, 'contested': {...}, 'caveat': str},
+    or None when the tracker carries no directional reader at all.
+
+    Never raises. An unparseable trajectory block reads as ABSENT, not as
+    'holding'.
+    """
+    raw = _safe_dict(raw_data)
+    by_hub = {}
+    contested = {}
+
+    # Sudan shape: multi-hub dict (+ the _contested marker when two patrons
+    # pull opposite ways inside one country -- Libya is the archetype).
+    multi = raw.get('trajectories')
+    if isinstance(multi, dict):
+        for hub, payload in multi.items():
+            if hub == '_contested':
+                contested = _safe_dict(payload)
+                continue
+            p = _safe_dict(payload)
+            if p.get('direction'):
+                by_hub[str(hub).lower()] = p
+
+    # Mali shape: one flat payload. hub defaults to russia only because the
+    # reader stamps 'hub' into every payload it builds; the default is a
+    # backstop, not an assumption about who is being measured.
+    flat = raw.get('trajectory')
+    if isinstance(flat, dict) and flat.get('direction'):
+        by_hub.setdefault(str(flat.get('hub') or 'russia').lower(), flat)
+
+    if not by_hub:
+        return None
+
+    caveat = _safe_str(raw.get('trajectory_caveat'))
+    if not caveat:
+        for p in by_hub.values():
+            if _safe_str(p.get('caveat')):
+                caveat = _safe_str(p.get('caveat'))
+                break
+
+    return {'by_hub': by_hub, 'contested': contested,
+            'caveat': caveat or TRAJECTORY_DEFAULT_CAVEAT}
+
+
+def _trajectory_summary(tj):
+    """Compact per-hub direction for the payload / page.
+
+    None stays None. A page that receives None renders 'no directional read',
+    which is the truth, rather than a confident 'holding'.
+    """
+    if not tj:
+        return None
+    out = {}
+    for hub, p in (_safe_dict(tj).get('by_hub') or {}).items():
+        p = _safe_dict(p)
+        out[str(hub)] = {
+            'direction':        _safe_str(p.get('direction'), 'holding'),
+            'magnitude':        _safe_int(p.get('level')),
+            'confidence':       _safe_str(p.get('confidence'), 'no_evidence'),
+            'evidence_classes': _safe_dict(p.get('evidence_classes')),
+        }
+    return out or None
+
+
+# ============================================================
 # NORMALIZATION SHIM
 # ============================================================
 def _normalize_tracker_data(theatre, raw_data):
@@ -354,6 +497,10 @@ def _normalize_tracker_data(theatre, raw_data):
     wheel = _safe_dict(raw_data.get('wheel_convergence'))
     silence = _safe_list(raw_data.get('silence_anomalies'))
 
+    # ---- DIRECTIONAL READ (v1.1.0) ----
+    # None when the tracker has no trajectory reader. Do not coalesce to {}.
+    trajectory = _normalize_trajectory(raw_data)
+
     return {
         'theatre':      theatre,
         'display':      THEATRE_DISPLAY.get(theatre, theatre.upper()),
@@ -370,6 +517,7 @@ def _normalize_tracker_data(theatre, raw_data):
         'vector_levels':  vector_levels,
         'wheel':          wheel,
         'silence':        silence,
+        'trajectory':     trajectory,
         'top_signals':    _safe_list(raw_data.get('top_signals')),
         'scanned_at':     _safe_str(raw_data.get('scan_date')),
         'article_count':  _safe_int(raw_data.get('article_count')),
@@ -441,6 +589,11 @@ def _determine_regional_posture(trackers):
             'wheel_count':        0,
             'active_wheels':      [],
             'silence_count':      0,
+            'trajectory_by_hub':      {},
+            'trajectory_convergence': [],
+            'trajectory_claim_only':  [],
+            'trajectory_unread':      [],
+            'trajectory_contested':   [],
         }
 
     levels = [t['levels']['threat'] for t in trackers.values()]
@@ -476,6 +629,66 @@ def _determine_regional_posture(trackers):
     # Silence anomalies across claiming actors
     silence_count = sum(len(_safe_list(d.get('silence'))) for d in trackers.values())
 
+    # ── TRAJECTORY ROLLUP (v1.1.0 Oct 5 2026) ───────────────────────────
+    # Not "is this patron present" -- the wheel panel answers that -- but
+    # "which way is the plug moving, and is it moving the same way in more
+    # than one country at once."
+    traj_by_hub    = {}   # hub -> direction -> [{theatre, level, confidence}]
+    traj_unread    = []   # trackers with no directional reader at all
+    traj_contested = []   # countries where two patrons pull opposite ways
+    for theatre, data in trackers.items():
+        tj = data.get('trajectory')
+        if not tj:
+            traj_unread.append(theatre)
+            continue
+        if _safe_dict(tj).get('contested'):
+            traj_contested.append(theatre)
+        for hub, payload in (_safe_dict(tj).get('by_hub') or {}).items():
+            payload = _safe_dict(payload)
+            direction = str(payload.get('direction') or 'holding').lower()
+            if direction not in TRAJECTORY_DIRECTIONS:
+                direction = 'holding'
+            traj_by_hub.setdefault(str(hub), {}).setdefault(direction, []).append({
+                'theatre':    theatre,
+                'level':      _safe_int(payload.get('level')),
+                'confidence': _safe_str(payload.get('confidence'), 'no_evidence'),
+            })
+
+    # Convergence: SAME patron, SAME direction, >= N countries, each reading at
+    # or above the confidence floor. A pattern that clears the country count but
+    # not the confidence floor is recorded separately rather than suppressed --
+    # absence-honesty cuts both ways, and "two insurgent groups claim it" is a
+    # real finding as long as it is labelled as one.
+    traj_convergence = []
+    traj_claim_only  = []
+    for hub, dirs in traj_by_hub.items():
+        for direction in ('contracting', 'expanding'):
+            entries = dirs.get(direction) or []
+            if len(entries) < TRAJECTORY_CONVERGENCE_MIN:
+                continue
+            solid = [e for e in entries
+                     if _confidence_rank(e['confidence']) >= TRAJECTORY_MIN_CONFIDENCE_RANK]
+            record = {
+                'hub':                 hub,
+                'direction':           direction,
+                # Sorted so the signal text is deterministic across runs --
+                # dict insertion order would otherwise reshuffle the country
+                # names whenever a tracker's read time changed.
+                'countries':           sorted(e['theatre'] for e in entries),
+                'confirmed_countries': sorted(e['theatre'] for e in solid),
+                'peak_magnitude':      max([e['level'] for e in entries] or [0]),
+            }
+            if len(solid) >= TRAJECTORY_CONVERGENCE_MIN:
+                traj_convergence.append(record)
+            else:
+                traj_claim_only.append(record)
+
+    # DELIBERATELY NOT WIRED INTO THE POSTURE LADDER BELOW (v1.1.0).
+    # A patron realignment is a different KIND of finding from kinetic
+    # escalation, and folding it into the same label would make "ELEVATED"
+    # mean two incompatible things. It reports, it emits a signal, it writes
+    # prose. Promoting it to a posture rung is a separate, deliberate decision.
+
     # Posture ladder
     if total_breached >= 2 or max_level >= 5:
         label, color = 'CRITICAL -- MULTI-BREACH OR ACTIVE CONFLICT', '#dc2626'
@@ -506,6 +719,11 @@ def _determine_regional_posture(trackers):
         'wheel_count':        wheel_count,
         'active_wheels':      active_wheels,
         'silence_count':      silence_count,
+        'trajectory_by_hub':      traj_by_hub,
+        'trajectory_convergence': traj_convergence,
+        'trajectory_claim_only':  traj_claim_only,
+        'trajectory_unread':      traj_unread,
+        'trajectory_contested':   traj_contested,
     }
 
 
@@ -584,6 +802,27 @@ def _build_bluf_prose(posture, trackers, missing):
                          'Bab-el-Mandeb, Israel-Somaliland) are not lighting together '
                          'this cycle; each rides independently.')
 
+        # Directional read (v1.1.0) -- single-country mode states it per patron
+        tj_sum = _trajectory_summary(data.get('trajectory'))
+        if tj_sum:
+            moving = [(h, v) for h, v in tj_sum.items()
+                      if v['direction'] in ('contracting', 'expanding')]
+            if moving:
+                phr = '; '.join(
+                    '%s %s (magnitude %d, %s)'
+                    % (h.title(),
+                       'losing ground' if v['direction'] == 'contracting' else 'gaining ground',
+                       v['magnitude'], v['confidence'].replace('_', ' '))
+                    for h, v in moving[:3])
+                parts.append('Patron trajectory: %s. Direction, not presence -- '
+                             'and reporting, not ground truth.' % phr)
+            else:
+                parts.append('Patron trajectory reads HOLDING: the sensor ran and '
+                             'found no directional movement this cycle.')
+        else:
+            parts.append('No patron trajectory sensor on this tracker -- the '
+                         'directional axis is UNREAD here, not holding.')
+
         # Silence -- Africa-specific signal class
         sil = _safe_list(data.get('silence'))
         if sil:
@@ -631,6 +870,33 @@ def _build_bluf_prose(posture, trackers, missing):
     if posture['wheel_converged']:
         wheels = ', '.join(posture['active_wheels']) or 'multiple'
         parts.append('Junction CONVERGED across %s.' % wheels)
+
+    # ── Directional read (v1.1.0). Presence is the wheel panel's job; this
+    #    sentence exists to say which way the patron is moving. ──
+    for rec in _safe_list(posture.get('trajectory_convergence'))[:2]:
+        hub   = str(rec.get('hub', 'patron')).title()
+        verb  = ('losing ground in' if rec.get('direction') == 'contracting'
+                 else 'gaining ground in')
+        names = ', '.join(THEATRE_DISPLAY.get(c, c.upper())
+                          for c in _safe_list(rec.get('confirmed_countries')))
+        parts.append('%s is %s %s simultaneously -- direction, not presence.'
+                     % (hub, verb, names))
+
+    for rec in _safe_list(posture.get('trajectory_claim_only'))[:1]:
+        hub   = str(rec.get('hub', 'patron')).title()
+        verb  = ('losing ground' if rec.get('direction') == 'contracting'
+                 else 'gaining ground')
+        names = ', '.join(THEATRE_DISPLAY.get(c, c.upper())
+                          for c in _safe_list(rec.get('countries')))
+        parts.append('%s is also reported %s in %s, but on interested-party claims '
+                     'no confirming outlet has carried -- a claim being made, not '
+                     'ground confirmed to have moved.' % (hub, verb, names))
+
+    if _safe_list(posture.get('trajectory_unread')):
+        parts.append('No directional read for %s: those trackers carry no trajectory '
+                     'sensor, so they are UNREAD on this axis, not holding.'
+                     % ', '.join(THEATRE_DISPLAY.get(t, t.upper())
+                                 for t in _safe_list(posture.get('trajectory_unread'))[:4]))
 
     if posture['silence_count']:
         parts.append('%d claiming-actor silence anomal%s flagged -- quiet from actors '
@@ -732,6 +998,68 @@ def _build_signals(posture, trackers):
                            'pattern that historically precedes regional realignment. '
                            'CONVERGENCE indicator, NOT a probability of action.'
                            % (n, ', '.join(wheels) if wheels else 'multiple')),
+        })
+
+    # 2b) PATRON TRAJECTORY CONVERGENCE (v1.1.0 Oct 5 2026)
+    #     The directional read the trackers have emitted since July and nothing
+    #     consumed. "Lit" and "winning" are not the same finding, and until now
+    #     this platform could only say the first one.
+    for rec in _safe_list(posture.get('trajectory_convergence')):
+        hub    = str(rec.get('hub', 'patron')).title()
+        direc  = str(rec.get('direction', 'holding'))
+        solid  = _safe_list(rec.get('confirmed_countries'))
+        names  = ', '.join(THEATRE_DISPLAY.get(c, c.upper()) for c in solid)
+        verb   = 'losing ground' if direc == 'contracting' else 'gaining ground'
+        all_signals.append({
+            'priority':      14,
+            'category':      'patron_trajectory_convergence',
+            'theatre':       'regional',
+            'pressure_type': 'influence',
+            'level':         max(3, _safe_int(rec.get('peak_magnitude'))),
+            'icon':          '\U0001F4C9' if direc == 'contracting' else '\U0001F4C8',
+            'color':         '#f97316',
+            'short_text':    'AFRICA: %s %s in %d countries at once (%s)'
+                             % (hub, verb, len(solid), names),
+            'long_text':     ('AFRICA patron trajectory -- %s is %s in %s at the same '
+                              'time. This is a DIRECTIONAL read, not a presence read: '
+                              'the wheel panel shows where a patron is plugged in, this '
+                              'shows which way the plug is moving. One country moving is '
+                              'a local story; %d moving the same way is a regional '
+                              'question that demands a why. Reading rests on reporting, '
+                              'not ground truth -- a patron losing ground unreported '
+                              'registers as holding. CONVERGENCE indicator, NOT a '
+                              'probability of action.'
+                              % (hub, verb, names, len(solid))),
+        })
+
+    # 2c) The same pattern, CLAIM-SOURCED ONLY. Surfaced rather than dropped,
+    #     at lower priority and with the provenance in the first clause, because
+    #     an interested party's claim is evidence of a claim being made.
+    for rec in _safe_list(posture.get('trajectory_claim_only')):
+        hub    = str(rec.get('hub', 'patron')).title()
+        direc  = str(rec.get('direction', 'holding'))
+        allc   = _safe_list(rec.get('countries'))
+        names  = ', '.join(THEATRE_DISPLAY.get(c, c.upper()) for c in allc)
+        verb   = 'losing ground' if direc == 'contracting' else 'gaining ground'
+        all_signals.append({
+            'priority':      9,
+            'category':      'patron_trajectory_claimed',
+            'theatre':       'regional',
+            'pressure_type': 'influence',
+            'level':         2,
+            'icon':          '\U0001F5E3️',   # speaking head
+            'color':         '#a78bfa',
+            'short_text':    'AFRICA: %s reported %s in %s -- claim-sourced only'
+                             % (hub, verb, names),
+            'long_text':     ('AFRICA patron trajectory, UNCONFIRMED -- %s is reported %s '
+                              'in %s, but no reading in this set reached a confirming '
+                              'outlet. The claims originate with interested parties '
+                              '(insurgent claim channels and partisan OSINT relays), so '
+                              'this is evidence that a claim is being made, not evidence '
+                              'that the ground has moved. Shown because suppressing it '
+                              'would hide a pattern; labelled because reporting it as '
+                              'fact would manufacture one.'
+                              % (hub, verb, names)),
         })
 
     # 3) Claiming-actor silence -- signal class Europe has no equivalent for
@@ -853,7 +1181,8 @@ def build_regional_bluf(force=False):
             except Exception:
                 pass
 
-    print('[Africa BLUF v1.0] Building regional BLUF from Africa tracker caches...')
+    print('[Africa BLUF v%s] Building regional BLUF from Africa tracker caches...'
+          % MODULE_VERSION)
 
     try:
         trackers, trackers_missing, trackers_stale = _read_all_trackers()
@@ -898,6 +1227,9 @@ def build_regional_bluf(force=False):
                 'freshness':       data.get('freshness', 'live'),
                 'article_count':   data.get('article_count', 0),
                 'vector_levels':   data.get('vector_levels', {}),
+                # v1.1.0 -- None means NO SENSOR, not 'holding'. The page must
+                # render those two differently; see rhetoric-africa.html.
+                'trajectory':      _trajectory_summary(data.get('trajectory')),
             }
 
         scores = [t.get('score', 0) for t in theatre_summary.values()]
@@ -922,6 +1254,13 @@ def build_regional_bluf(force=False):
             'wheel_count':        posture['wheel_count'],
             'active_wheels':      posture['active_wheels'],
             'silence_anomaly_count': posture['silence_count'],
+            # ── Directional rollup (v1.1.0 Oct 5 2026) ──
+            'trajectory_convergence': posture['trajectory_convergence'],
+            'trajectory_claim_only':  posture['trajectory_claim_only'],
+            'trajectory_by_hub':      posture['trajectory_by_hub'],
+            'trajectory_unread':      posture['trajectory_unread'],
+            'trajectory_contested':   posture['trajectory_contested'],
+            'trajectory_caveat':      TRAJECTORY_DEFAULT_CAVEAT,
             # Coverage bookkeeping
             'trackers_live':      trackers_live,
             'theatres_live':      trackers_live,
@@ -933,7 +1272,7 @@ def build_regional_bluf(force=False):
             'convergence_panel':  _build_convergence_panel(),
             'theatre_summary':    theatre_summary,
             'generated_at':       datetime.now(timezone.utc).isoformat(),
-            'version':            '1.0.1',
+            'version':            MODULE_VERSION,
             'methodology_note':   (
                 'How to read this: country scores are rhetoric-signal composites -- '
                 'weighted volume and severity of classified statements from officials, '
@@ -948,11 +1287,15 @@ def build_regional_bluf(force=False):
         _bluf_ttl = BLUF_INCOMPLETE_TTL if (trackers_missing or trackers_stale) else BLUF_CACHE_TTL
         wrote = _redis_set(BLUF_CACHE_KEY, result, ttl=_bluf_ttl)
         result['cache_written'] = bool(wrote)
-        print("[Africa BLUF v1.0] Built: posture=%s, max_level=L%d, breached=%d, "
-              "signals=%d, trackers_live=%d/%d, wheel_converged=%s, cache_written=%s"
-              % (posture['label'], posture['peak_level'], posture['breached_count'],
-                 len(top_signals), trackers_live, len(TRACKER_KEYS),
-                 posture['wheel_converged'], wrote))
+        print("[Africa BLUF v%s] Built: posture=%s, max_level=L%d, breached=%d, "
+              "signals=%d, trackers_live=%d/%d, wheel_converged=%s, "
+              "traj_convergence=%d, traj_claimed=%d, traj_unread=%s, cache_written=%s"
+              % (MODULE_VERSION, posture['label'], posture['peak_level'],
+                 posture['breached_count'], len(top_signals), trackers_live,
+                 len(TRACKER_KEYS), posture['wheel_converged'],
+                 len(posture['trajectory_convergence']),
+                 len(posture['trajectory_claim_only']),
+                 posture['trajectory_unread'] or 'none', wrote))
         return result
 
     except Exception as e:
@@ -987,13 +1330,21 @@ def register_africa_bluf_routes(app):
         cached = _redis_get(BLUF_CACHE_KEY)
         tracker_state = {}
         for theatre, key in TRACKER_KEYS.items():
+            live = _redis_get(key)
+            # v1.1.0 -- say plainly whether this tracker carries a directional
+            # reader at all. 'trajectory_present: false' is a build-queue fact
+            # (Somalia is a junction, not a Russia spoke); it is NOT a failure,
+            # and it is NOT the same as a reader returning 'holding'.
             tracker_state[theatre] = {
-                'live_cache_present':     bool(_redis_get(key)),
+                'live_cache_present':     bool(live),
                 'lastgood_cache_present': bool(_redis_get(_lastgood_key(theatre))),
                 'key':                    key,
+                'trajectory_present':     bool(_normalize_trajectory(live)),
+                'trajectory_hubs':        sorted((_normalize_trajectory(live)
+                                                  or {}).get('by_hub', {}).keys()),
             }
         return jsonify({
-            'module':         'africa_regional_bluf v1.0.0',
+            'module':         'africa_regional_bluf v%s' % MODULE_VERSION,
             'bluf_cache_key': BLUF_CACHE_KEY,
             'cache_present':  cached is not None,
             'trackers_configured': list(TRACKER_KEYS.keys()),
