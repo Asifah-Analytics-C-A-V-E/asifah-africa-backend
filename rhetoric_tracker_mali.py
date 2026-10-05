@@ -1,6 +1,8 @@
 """
 Mali Rhetoric & Pressure Tracker — Asifah Analytics
-version: 1.0.0 — July 25, 2026  |  Africa backend (asifah-africa-backend.onrender.com)
+version: 1.1.0 — Oct 5, 2026  |  Africa backend (asifah-africa-backend.onrender.com)
+  (v1.0.0 Jul 25 2026; v1.1.0 unions the trajectory + red-line event vocabulary
+   into matched_phrases, which three event-gated red lines were starving on)
 
 Mali is a RUSSIA SPOKE and, more importantly, the TEST CASE for whether the
 Africa Corps model works at all. Alongside CAR and Libya it is the largest
@@ -495,6 +497,80 @@ CLAIM_SOURCE_HINTS = [
     'fla claim', 'claimed', 'rebels say', 'according to the fla',
     'osint', 'telegram', 'unconfirmed', 'revendiqu\u00e9', 'selon les rebelles',
 ]
+
+# ── RED-LINE EVENT PHRASES (v1.1.0, Oct 5 2026) ──────────────────────────
+# THE BUG THIS FIXES
+# mali_signal_interpreter gates its event red lines on `matched_phrases`, which
+# classify_articles populates ONLY from _VECTOR_MAP triggers. The red lines were
+# written against TRAJECTORY_EVIDENCE and against capital-approach place names
+# that live in neither. Two vocabularies, one gate. Measured, Oct 5 2026:
+#
+#   africa_corps_withdrawal   0/6 keywords reachable  -- COULD NEVER BREACH
+#   bamako_threatened         2/6
+#   territory_lost            2/6
+#
+# The withdrawal line is the one whose own `source` field reads "the strongest
+# single contraction signal available: it is the hub's own judgement about the
+# position, not an adversary's claim about it." It was wired to a dead gate for
+# ten weeks, reporting QUIET or APPROACHING and never BREACHED.
+#
+# WHY A SEPARATE VOCABULARY RATHER THAN PADDING KINETIC_TRIGGERS
+# The RED_LINES block opens with the lesson Sudan taught: "EVENT-gated lines
+# require their own phrase in the corpus; a hot vector alone is APPROACHING,
+# never BREACHED. ('El Obeid Falls' fired on an unrelated casualty report
+# because it keyed on the kinetic vector max.)" Folding these into
+# KINETIC_TRIGGERS would make every one of them raise the kinetic level too,
+# re-coupling the event gate to the vector it is supposed to be independent of.
+# These phrases are scanned for PRESENCE only. They never score a vector.
+RED_LINE_EVENT_PHRASES = [
+    # Capital approaches -- bamako_threatened. Kati is the garrison town whose
+    # mutiny began the 2012 coup; Senou is Bamako's airport.
+    'attack on bamako', 'kenieroba', 'kati attacked', 'senou attacked',
+]
+
+
+def _scan_red_line_events(articles):
+    """Presence-only scan for red-line event phrases. Scores nothing.
+
+    Returns the set of phrases found, for union into `matched_phrases`.
+    """
+    found = set()
+    for article in (articles or []):
+        try:
+            text = f"{article.get('title','')} {article.get('description','')}".lower()
+        except Exception:
+            continue
+        for phrase in RED_LINE_EVENT_PHRASES:
+            if phrase in text:
+                found.add(phrase)
+    return found
+
+
+def _trajectory_phrases(trajectory):
+    """Every phrase the trajectory reader actually matched, flattened.
+
+    read_trajectory returns evidence as
+        {direction: {evidence_class: [{'phrase','title','url','source'}, ...]}}
+    so the phrases exist; nothing had ever collected them. Folding them into
+    `matched_phrases` is what lets the interpreter's event gate see the
+    territory-loss and withdrawal language the reader already found.
+
+    Never raises -- a malformed trajectory contributes nothing rather than
+    breaking the scan.
+    """
+    out = set()
+    try:
+        for direction_block in (trajectory or {}).get('evidence', {}).values():
+            if not isinstance(direction_block, dict):
+                continue
+            for hits in direction_block.values():
+                for hit in (hits or []):
+                    if isinstance(hit, dict) and hit.get('phrase'):
+                        out.add(str(hit['phrase']).lower())
+    except Exception as e:
+        print(f"[Mali Rhetoric] trajectory phrase fold failed (non-fatal): {str(e)[:90]}")
+    return out
+
 
 CONDITIONAL_TRIGGERS = {
     3: ['if bamako', 'if kidal', 'should the junta', 'unless russia',
@@ -1335,6 +1411,17 @@ def run_mali_rhetoric_scan(days=3):
 
     actor_results, ts = classify_articles(articles)
     trajectory = _read_trajectory(articles)
+
+    # ── v1.1.0: make `matched_phrases` mean "what this scan matched" ──
+    # It previously meant "what the VECTOR SCORER matched", which silently
+    # starved the interpreter's event-gated red lines of the trajectory and
+    # capital-approach vocabulary. Union happens BEFORE the interpreter runs.
+    # Neither source scores a vector: levels are unchanged by this block.
+    _folded = _trajectory_phrases(trajectory) | _scan_red_line_events(articles)
+    if _folded:
+        ts['matched_phrases'] |= _folded
+        print(f"[Mali Rhetoric] Event vocabulary folded into matched_phrases: "
+              f"{sorted(_folded)}")
 
     vl = {v: ts[f'{v}_max'] for v, _ in _VECTOR_MAP}
     theatre_level = max(vl.values()) if vl else 0
