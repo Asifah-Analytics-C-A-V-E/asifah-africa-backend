@@ -1945,7 +1945,15 @@ def run_sudan_rhetoric_scan(days=3):
 
     # ── History snapshot (lpush + ltrim 0/119) ──
     try:
-        snapshot = json.dumps({
+        # v1.1.0 Oct 5 2026 -- the DIRECTIONAL read now rides on the history.
+        # Mali has carried trajectory in its history snapshot since July; Sudan
+        # has not, so any trailing-window read could see direction for one
+        # Africa spoke and not the other. Written PER HUB (Sudan is multi-hub:
+        # russia and uae pull independently, and sometimes opposite ways), and
+        # only for hubs actually read this cycle -- a MISSING key means no
+        # sensor, which has to stay distinguishable from a sensor reporting
+        # 'holding'. Never write a placeholder direction.
+        _snap = {
             'ts': datetime.now(timezone.utc).isoformat(),
             'score': rhetoric_score,
             'level': theatre_escalation_level,
@@ -1955,7 +1963,17 @@ def run_sudan_rhetoric_scan(days=3):
             'uae_axis':     max_uae_axis,
             'peace_track':  peace_level,
             'specificity':  theatre_specificity,
-        })
+        }
+        for _hub, _tj in (_trajectories or {}).items():
+            if _hub == '_contested' or not isinstance(_tj, dict):
+                continue
+            _dir = _tj.get('direction')
+            if not _dir:
+                continue
+            _snap['traj_%s' % _hub]       = _dir
+            _snap['traj_%s_level' % _hub] = _tj.get('level', 0)
+            _snap['traj_%s_conf' % _hub]  = _tj.get('confidence', 'no_evidence')
+        snapshot = json.dumps(_snap)
         if UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN:
             import urllib.parse
             enc = urllib.parse.quote(snapshot, safe='')
