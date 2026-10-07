@@ -178,12 +178,28 @@ except ImportError as e:
     print(f"[Africa] ⚠️ africa_regional_bluf not yet available: {e}")
 
 try:
-    from nigeria_stability import register_nigeria_stability_endpoints
+    
     NIGERIA_STABILITY_AVAILABLE = True
     print("[Africa] ✅ nigeria_stability loaded")
 except ImportError as e:
     NIGERIA_STABILITY_AVAILABLE = False
     print(f"[Africa] ⚠️ nigeria_stability not yet available: {e}")
+
+try:
+    from burkina_faso_humanitarian import register_burkina_faso_humanitarian_endpoints
+    BURKINA_HUMANITARIAN_AVAILABLE = True
+    print("[Africa] ✅ burkina_faso_humanitarian loaded")
+except ImportError as e:
+    BURKINA_HUMANITARIAN_AVAILABLE = False
+    print(f"[Africa] ⚠️ burkina_faso_humanitarian not yet available: {e}")
+
+try:
+    from burkina_faso_financial import register_burkina_faso_financial_endpoints
+    BURKINA_FINANCIAL_AVAILABLE = True
+    print("[Africa] ✅ burkina_faso_financial loaded")
+except ImportError as e:
+    BURKINA_FINANCIAL_AVAILABLE = False
+    print(f"[Africa] ⚠️ burkina_faso_financial not yet available: {e}")
 
 
 # ============================================================
@@ -2575,6 +2591,20 @@ if NIGERIA_STABILITY_AVAILABLE:
     except Exception as e:
         print(f'[Africa] ⚠️ Nigeria stability registration failed: {e}')
 
+if BURKINA_HUMANITARIAN_AVAILABLE:
+    try:
+        register_burkina_faso_humanitarian_endpoints(app)
+        print('[Africa] ✅ Burkina Faso humanitarian endpoints registered')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Burkina Faso humanitarian registration failed: {e}')
+
+if BURKINA_FINANCIAL_AVAILABLE:
+    try:
+        register_burkina_faso_financial_endpoints(app, start_background=True)
+        print('[Africa] ✅ Burkina Faso financial endpoints registered (12h scheduler ON)')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Burkina Faso financial registration failed: {e}')
+
 
 # ============================================================
 # BOOT
@@ -2594,6 +2624,7 @@ print(f'  Commodity: {"✅ proxy loaded" if COMMODITY_PROXY_AVAILABLE else "⏳ 
 print(f'  Articles:  {"✅ gatherer loaded" if ARTICLE_GATHERER_AVAILABLE else "⏳ pending"}')
 print(f'  Sudan:     {"✅ tracker loaded" if SUDAN_RHETORIC_AVAILABLE else "⏳ pending"}')
 print(f'  BLUF:      {"✅ regional BLUF loaded" if AFRICA_BLUF_AVAILABLE else "⏳ pending"}')
+print(f'  Burkina:   {"✅ humanitarian + financial" if (BURKINA_HUMANITARIAN_AVAILABLE and BURKINA_FINANCIAL_AVAILABLE) else "⏳ partial/pending"}')
 print('=' * 60)
 
 
