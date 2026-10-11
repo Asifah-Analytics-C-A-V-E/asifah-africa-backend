@@ -331,6 +331,75 @@ def _fetch_yahoo_chart_with_sparkline(ticker, ticker_url_encoded=None):
     return None
 
 
+# ------------------------------------------------------------------
+# GOLD VIA THE COMMODITY PROXY -- ONE WRITER, MANY READERS
+#
+# 11 Oct 2026. The Africa backend's IP is rate-limited by Yahoo; the ME
+# backend's is not. On the same day, at the same minute, the Africa
+# backend got HTTP 429 on GC=F while commodity_tracker on the ME backend
+# returned GC=F at 4216.30 with a 21-point sparkline.
+#
+# So the Africa backend should not be asking Yahoo for gold at all. The
+# price already crosses the wire inside the commodity payload that the
+# stability page is ALREADY rendering. We read it from there.
+#
+# Direct function call, not a self-HTTP call: this module runs inside the
+# same Flask app as the proxy, and a single-worker gunicorn calling back
+# into itself deadlocks.
+#
+# NOTE ON SPARKLINE SHAPE: commodity_tracker emits a FLAT list of floats;
+# the Yahoo fetcher above emits [{time, value}]. We pass the flat list
+# through rather than inventing dates for points whose dates we were not
+# given. The frontend accepts both shapes.
+# ------------------------------------------------------------------
+def _fetch_gold_via_commodity_proxy():
+    """Read the gold price out of the Africa commodity proxy.
+
+    Returns the same dict shape as _fetch_yahoo_chart_with_sparkline, or
+    None. ABSENCE-HONEST: a miss here returns None and the tile says
+    UNAVAILABLE -- it never falls through to a stale or invented number.
+    """
+    try:
+        from commodity_proxy_africa import get_africa_commodity_data
+    except ImportError as e:
+        _LAST_ERRORS['GC=F'] = 'commodity proxy not importable: %s' % str(e)[:60]
+        print('[BF Financial] Gold: commodity proxy unavailable (%s)' % str(e)[:80])
+        return None
+
+    try:
+        data = get_africa_commodity_data('burkina_faso') or {}
+        for tile in (data.get('commodity_summaries') or []):
+            if tile.get('commodity') != 'gold':
+                continue
+            spark = tile.get('sparkline') or {}
+            price = spark.get('price')
+            if price is None:
+                continue
+            pct = spark.get('change_pct_1d')
+            series = [p for p in (spark.get('spark') or []) if p is not None]
+            src = 'commodity_tracker (ME) via Africa proxy'
+            if spark.get('fallback_used'):
+                src += ' -- FALLBACK TICKER'
+            print('[BF Financial] Gold via commodity proxy: %s (%s pts)'
+                  % (price, len(series)))
+            _LAST_ERRORS.pop('GC=F', None)
+            return {
+                'value':          round(float(price), 4),
+                'change_pct_24h': (round(float(pct), 2) if pct is not None else None),
+                'sparkline':      series[-30:],
+                'source':         src,
+                'ticker_used':    spark.get('source_ticker_used') or spark.get('ticker') or 'GC=F',
+                'timestamp':      spark.get('last_updated'),
+                'via_proxy':      True,
+            }
+        _LAST_ERRORS['GC=F'] = 'commodity proxy returned no gold price'
+        print('[BF Financial] Gold: proxy answered but carried no price')
+    except Exception as e:
+        _LAST_ERRORS['GC=F'] = 'proxy read %s: %s' % (type(e).__name__, str(e)[:60])
+        print('[BF Financial] Gold proxy read error: %s' % str(e)[:100])
+    return None
+
+
 def _fetch_with_failover(primary, fallback=None):
     """Try primary, then fallback. ABSENCE-HONEST: returns None if both fail.
 
@@ -721,7 +790,12 @@ def get_burkina_faso_financial(force=False):
                 pass
 
     print('[BF Financial] Fetching fresh market data...')
-    gold   = _fetch_yahoo_chart_with_sparkline('GC=F')
+    # Gold: proxy FIRST (the ME backend's IP is not throttled), Yahoo only
+    # as the fallback. Reversed from every other tile on purpose.
+    gold   = _fetch_gold_via_commodity_proxy()
+    if gold is None:
+        print('[BF Financial] Gold: proxy miss -- trying Yahoo directly')
+        gold = _fetch_yahoo_chart_with_sparkline('GC=F')
     cotton = _fetch_yahoo_chart_with_sparkline('CT=F')
     # XOF=X is the primary; EURUSD=X is a DIAGNOSTIC fallback, not a substitute
     # -- if XOF=X is missing we at least know whether Yahoo FX is reachable.
