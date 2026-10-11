@@ -106,7 +106,12 @@ TRACKER_KEYS = {
     'mali':    'rhetoric:mali:latest',      # v1.0 Jul 25 2026 -- Russia spoke + TRAJECTORY read
                                             # (born with the gaining/losing vector; the Africa
                                             #  Corps test case)
-    # 'burkina_faso': 'rhetoric:burkina_faso:latest',
+    'burkina_faso': 'rhetoric:burkina_faso:latest',   # v1.0 Oct 11 2026 -- TIER-2 spoke.
+                                            # No trajectory sensor BY DESIGN: Burkina's
+                                            # directional read is the three-state
+                                            # commercial axis, not gaining/losing. It
+                                            # lands in trajectory_unread, which is
+                                            # correct and should stay that way.
     # 'niger':        'rhetoric:niger:latest',
     # 'car':          'rhetoric:car:latest',
     # 'drc':          'rhetoric:drc:latest',
