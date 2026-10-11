@@ -1502,6 +1502,41 @@ def scan_burkina_faso_rhetoric(force=False, days=7):
     PLATFORM_LABELS = {0: 'Monitoring', 1: 'Rhetoric', 2: 'Warning',
                        3: 'Confrontation', 4: 'Coercion', 5: 'Active Conflict'}
 
+    # ── BLUF COMPATIBILITY ALIASES ──────────────────────────────────
+    # africa_regional_bluf's _normalize_tracker_data reads a specific set of
+    # key names. Probed 11 Oct 2026 with a real BF payload: theatre_level and
+    # theatre_score land, but red_lines, scan_date and article_count all read
+    # empty because this module names them differently. Rather than widen the
+    # BLUF for one tracker's spelling, the tracker speaks the BLUF's dialect.
+    #
+    # red_lines: the BLUF counts entries whose status == 'BREACHED' to build
+    # the regional breach count. Our tripwires ARE red lines, so they are
+    # mapped rather than left on the floor -- surge/high read as BREACHED,
+    # elevated as APPROACHING.
+    _rl_triggered = []
+    for _t in tripwires:
+        _sev = _t.get('severity', 'elevated')
+        _rl_triggered.append({
+            'id': _t.get('id'),
+            'actor': _t.get('actor'),
+            'severity': _sev,
+            'status': 'BREACHED' if _sev in ('surge', 'high') else 'APPROACHING',
+            'note': (TRIPWIRES.get(_t.get('id')) or {}).get('note', ''),
+        })
+    red_lines = {
+        'triggered': _rl_triggered,
+        'breached_count': sum(1 for r in _rl_triggered if r['status'] == 'BREACHED'),
+        'approaching_count': sum(1 for r in _rl_triggered if r['status'] == 'APPROACHING'),
+    }
+
+    # The BLUF's vector backstop does _safe_int() on vector_levels.values() to
+    # find the hottest single vector. Ours are WORDS, so that read silently
+    # returns 0 and the backstop is dead for this tracker. Emit both: words for
+    # the page, platform integers for the rollup.
+    vector_levels_platform = {
+        k: LEVEL_TO_PLATFORM.get(v, 0) for k, v in vector_levels.items()
+    }
+
     result = {
         'success': True,
         'country': 'burkina_faso',
@@ -1524,7 +1559,12 @@ def scan_burkina_faso_rhetoric(force=False, days=7):
 
         'vector_scores': vector_scores,
         'vector_levels': vector_levels,
+        'vector_levels_platform': vector_levels_platform,
         'vector_labels': VECTOR_LABELS,
+        # BLUF dialect -- see the alias block above
+        'red_lines': red_lines,
+        'scan_date': datetime.now(timezone.utc).isoformat(),
+        'article_count': len(gated),
         'vector_validation': vector_validation,
         'actor_validation_as_of': VALIDATION_AS_OF,
         'validation_corpus_note': VALIDATION_CORPUS_NOTE,

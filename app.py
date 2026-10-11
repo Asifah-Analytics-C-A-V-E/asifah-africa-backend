@@ -201,6 +201,14 @@ except ImportError as e:
     BURKINA_FINANCIAL_AVAILABLE = False
     print(f"[Africa] ⚠️ burkina_faso_financial not yet available: {e}")
 
+try:
+    from rhetoric_tracker_burkina_faso import register_burkina_faso_rhetoric_routes
+    BURKINA_RHETORIC_AVAILABLE = True
+    print("[Africa] ✅ rhetoric_tracker_burkina_faso loaded")
+except ImportError as e:
+    BURKINA_RHETORIC_AVAILABLE = False
+    print(f"[Africa] ⚠️ rhetoric_tracker_burkina_faso not yet available: {e}")
+
 
 # ============================================================
 # FLASK APP
@@ -2605,6 +2613,13 @@ if BURKINA_FINANCIAL_AVAILABLE:
     except Exception as e:
         print(f'[Africa] ⚠️ Burkina Faso financial registration failed: {e}')
 
+if BURKINA_RHETORIC_AVAILABLE:
+    try:
+        register_burkina_faso_rhetoric_routes(app, start_background=True)
+        print('[Africa] ✅ Burkina Faso rhetoric endpoints registered (12h scheduler ON)')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Burkina Faso rhetoric registration failed: {e}')
+
 
 # ============================================================
 # BOOT
@@ -2624,7 +2639,9 @@ print(f'  Commodity: {"✅ proxy loaded" if COMMODITY_PROXY_AVAILABLE else "⏳ 
 print(f'  Articles:  {"✅ gatherer loaded" if ARTICLE_GATHERER_AVAILABLE else "⏳ pending"}')
 print(f'  Sudan:     {"✅ tracker loaded" if SUDAN_RHETORIC_AVAILABLE else "⏳ pending"}')
 print(f'  BLUF:      {"✅ regional BLUF loaded" if AFRICA_BLUF_AVAILABLE else "⏳ pending"}')
-print(f'  Burkina:   {"✅ humanitarian + financial" if (BURKINA_HUMANITARIAN_AVAILABLE and BURKINA_FINANCIAL_AVAILABLE) else "⏳ partial/pending"}')
+_bf_mods = [BURKINA_HUMANITARIAN_AVAILABLE, BURKINA_FINANCIAL_AVAILABLE,
+            BURKINA_RHETORIC_AVAILABLE]
+print(f'  Burkina:   {"✅ humanitarian + financial + rhetoric" if all(_bf_mods) else f"⏳ {sum(_bf_mods)}/3 loaded"}')
 print('=' * 60)
 
 
