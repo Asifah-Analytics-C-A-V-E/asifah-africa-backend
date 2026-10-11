@@ -171,6 +171,25 @@ _last_scan_started_at = None
 TIER_WEIGHTS = {1: 1.00, 2: 0.60, 3: 0.35}
 TIER_FRONT_END_VISIBLE = False
 
+# Front-end-safe wheel descriptions. Say what the actor is DOING here; never
+# say what tier it is. Kept separate from tier_rationale so tier language
+# cannot leak onto a page through a fallback.
+WHEEL_PAGE_NOTES = {
+    'russia': ('Present through commercial and energy channels more than troops: '
+               'Rosatom (construction agreement Oct 2024, comprehensive agreement '
+               'SPIEF Jun 2025, nuclear-liability convention ratified Jan 2026) '
+               'and Nordgold staying while Western operators divest. A '
+               'troop-counting read scores this near zero and misses it.'),
+    'china': ('Trade, health and agro-processing rather than infrastructure debt: '
+              'bilateral trade passed $1bn in 2025 (+47.7%), but the flagship road '
+              'is state-funded and the BRI loan book is thin. No dedicated actor '
+              'in this tracker yet -- reads unread, never absent.'),
+    'gulf':  ('The leading external commercial counterparty for Burkinabe gold, '
+              'and it belongs to no wheel this platform runs. Roughly 32% of '
+              'Burkinabe gold was sold to the UAE in 2024; around a third of '
+              'artisanal output leaves via Togo and UAE routes.'),
+}
+
 WHEEL_TIERS = {
     # wheel        tier  why
     'russia': (2, 'Present and compounding, but Burkina is not Russia\'s main '
@@ -316,7 +335,7 @@ ACTORS = {
     'russia_axis_bf': {
         'name': 'Russia Axis', 'flag': '\U0001F1F7\U0001F1FA', 'icon': '\U0001F43B',
         'color': '#0ea5e9',
-        'role': 'TIER 2 SPOKE -- Africa Corps, Rosatom, Nordgold',
+        'role': 'Africa Corps, Rosatom and Nordgold -- commercial and energy channels',
         'description': (
             'Russia in Burkina runs through THREE channels, and the security '
             'one is the quietest. (1) Africa Corps presence -- real but modest '
@@ -415,7 +434,7 @@ ACTORS = {
     'gulf_gold_channel': {
         'name': 'Gulf Gold Channel', 'flag': '\U0001F1E6\U0001F1EA', 'icon': '\U0001F947',
         'color': '#f59e0b',
-        'role': 'TIER 1, OFF-WHEEL -- the UAE mini-spoke',
+        'role': 'The gold corridor -- leading commercial counterparty, off-wheel',
         'description': (
             'The dominant external commercial counterparty for Burkinabe gold, '
             'and it belongs to a hub we have not built. Roughly 32% of '
@@ -1137,6 +1156,14 @@ def _build_wheel_presence(actor_summaries, commercial_axis):
             'tier': tier,
             'tier_weight': TIER_WEIGHTS.get(tier, 1.0),
             'tier_rationale': why,
+            # page_note is the FRONT-END-SAFE string. tier_rationale is the
+            # back-end explanation and contains tier language by design -- the
+            # Gulf one literally opens "TIER 1 AND OFF-WHEEL". A page that
+            # falls back to tier_rationale therefore renders a tier chip in
+            # prose, which is exactly what the 11 Oct ruling forbids. Caught in
+            # render validation the same day. The page reads page_note and
+            # never tier_rationale; this field is why it can.
+            'page_note': WHEEL_PAGE_NOTES.get(wheel, ''),
             'front_end_visible': TIER_FRONT_END_VISIBLE,
             'level': lvl,
             'role': role,
@@ -1157,6 +1184,7 @@ def _build_wheel_presence(actor_summaries, commercial_axis):
         'front_end_visible': TIER_FRONT_END_VISIBLE,
         'level': 'unread', 'role': 'trade_and_agro_processing',
         'active': False, 'raw_rank': None, 'weighted_rank': None,
+        'page_note': WHEEL_PAGE_NOTES['china'],
         'instrumentation': 'DARK -- NO DEDICATED ACTOR',
         'note': ('China is present (trade >$1bn in 2025, +47.7% YoY; hospital '
                  'and solar projects; May 2026 agro-processing agreements) but '
