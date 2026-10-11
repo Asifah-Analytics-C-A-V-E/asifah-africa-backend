@@ -385,24 +385,31 @@ def build_top_signals(actor_summaries, tripwires_global, commercial_axis,
             'sources': _sources_from(asum.get(tw.get('actor')), 1),
         })
 
-    # ── 2. The off-wheel flag. This is the signal the architecture gained. ──
+    # ── 2. The Gulf channel. 11 Oct 2026: THIS SIGNAL CHANGED MEANING.
+    #    It used to say the dominant actor was OFF-WHEEL, because the Gulf
+    #    belonged to no hub this platform ran. The UAE hub now exists, so the
+    #    channel has somewhere to ride to. The signal survives -- the point
+    #    was never "off-wheel", it was "do not attribute this to Russia by
+    #    elimination", and that still holds. It now names where it DOES go.
     wp = wheel_presence or {}
     gulf = wp.get('gulf') or {}
     if gulf.get('active'):
         signals.append({
-            'priority': 13, 'category': 'off_wheel_actor',
-            'type': 'off_wheel_actor', 'theatre': 'burkina_faso',
+            'priority': 13, 'category': 'gulf_channel',
+            'type': 'gulf_channel', 'theatre': 'burkina_faso',
             'pressure_type': 'economic', 'level': 'elevated',
             'icon': '\U0001F9ED', 'color': '#f59e0b',
             'short_text': ('\U0001F1E6\U0001F1EA BURKINA FASO: Gulf channel '
-                           'active -- dominant actor is OFF-WHEEL'),
+                           'active -- feeds the UAE purchasing wheel'),
             'long_text': (
                 'The dominant external commercial counterparty for Burkinabe '
-                'gold is the Gulf, and the Gulf is not a wheel this platform '
-                'runs. Roughly 32% of Burkinabe gold was sold to the UAE in '
-                '2024. This signal exists so the regional BLUF does NOT '
-                'attribute the movement to Russia or China by elimination: '
-                'absence of our actors is not presence of our actors.'),
+                'gold is the Gulf. Roughly 32% of Burkinabe gold was sold to '
+                'the UAE in 2024. As of 11 Oct 2026 this channel rides the UAE '
+                'purchasing wheel, so Burkina can be read beside the other '
+                'states selling into the same buyer. This signal exists so the '
+                'regional BLUF does NOT attribute the movement to Russia or '
+                'China by elimination: absence of our actors is not presence '
+                'of our actors.'),
         })
 
     # ── 3. Commercial axis (the tracker also prepends this; dedup upstream) ──

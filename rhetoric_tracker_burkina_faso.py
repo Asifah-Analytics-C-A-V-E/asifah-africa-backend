@@ -184,10 +184,11 @@ WHEEL_PAGE_NOTES = {
               'bilateral trade passed $1bn in 2025 (+47.7%), but the flagship road '
               'is state-funded and the BRI loan book is thin. No dedicated actor '
               'in this tracker yet -- reads unread, never absent.'),
-    'gulf':  ('The leading external commercial counterparty for Burkinabe gold, '
-              'and it belongs to no wheel this platform runs. Roughly 32% of '
-              'Burkinabe gold was sold to the UAE in 2024; around a third of '
-              'artisanal output leaves via Togo and UAE routes.'),
+    'gulf':  ('The leading external commercial counterparty for Burkinabe gold. '
+              'Roughly 32% of Burkinabe gold was sold to the UAE in 2024; around '
+              'a third of artisanal output leaves via Togo and UAE routes. This '
+              'channel now feeds the UAE purchasing wheel, so Burkina can be read '
+              'beside the other states selling into the same buyer.'),
 }
 
 WHEEL_TIERS = {
@@ -199,10 +200,13 @@ WHEEL_TIERS = {
     'china':  (2, 'BRI MOU signed Nov 2021 but thin hard debt; trade is 12.5:1 '
                   'in China\'s favour and the flagship road is state-funded. '
                   'Watch, do not anchor.'),
-    'gulf':   (1, 'TIER 1 AND OFF-WHEEL. ~32% of Burkinabe gold sold to the UAE '
-                  'in 2024. The dominant commercial counterparty belongs to a '
-                  'hub we have not built. dominant_actor_on_wheel=False exists '
-                  'so the BLUF does not attribute this to Russia by elimination.'),
+    'gulf':   (1, 'TIER 1, AND AS OF 11 OCT 2026 ON-WHEEL. ~32% of Burkinabe '
+                  'gold sold to the UAE in 2024. This used to read OFF-WHEEL '
+                  'because the dominant commercial counterparty belonged to a '
+                  'hub the platform did not run. The UAE hub now exists '
+                  '(spoke_wheel_reader v1.5.0 + rhetoric_tracker_uae v2.0.0), '
+                  'so this channel has somewhere to ride to and '
+                  'dominant_actor_on_wheel flips to True when it is active.'),
 }
 
 
@@ -1196,13 +1200,26 @@ def _build_wheel_presence(actor_summaries, commercial_axis):
         'russia': russia,
         'china': china,
         'gulf': gulf,
-        # THE FIELD THAT MATTERS. Gulf is tier 1 and off-wheel.
-        'dominant_actor_on_wheel': not gulf['active'],
+        # THE FIELD THAT MATTERS -- and its VALUE CHANGED on 11 Oct 2026.
+        #
+        # It used to read `not gulf['active']`: when the Gulf channel fired,
+        # this went False, meaning "the dominant commercial actor sits on no
+        # wheel we model, so do not attribute it to Russia by elimination."
+        # That was true for exactly as long as no UAE hub existed.
+        #
+        # The UAE hub now exists. The Gulf channel HAS somewhere to ride to, so
+        # an active Gulf channel now means the dominant actor IS on a wheel.
+        # Leaving the old expression would have had this tracker tell the BLUF
+        # "attribute this to nobody" in the same payload that feeds the UAE
+        # wheel -- one payload, two contradictory claims, which is the defect
+        # class we just cleared out of the UAE tracker.
+        'dominant_actor_on_wheel': bool(gulf['active']),
         'dominant_actor_note': (
-            'Gulf channel is active and belongs to a hub we have not built. '
-            'Do NOT attribute this movement to Russia or China by elimination.'
+            'Gulf channel is active and now rides the UAE purchasing wheel. '
+            'Attribute it there -- NOT to Russia or China by elimination.'
         ) if gulf['active'] else (
-            'No off-wheel dominant actor firing this cycle.'),
+            'No dominant commercial actor firing this cycle. Absence of a Gulf '
+            'reading is an unread channel, not a quiet one.'),
         'commercial_axis_state': commercial_axis.get('state'),
     }
 
@@ -1316,10 +1333,12 @@ def _builtin_prose(composite_level, vector_levels, actor_summaries,
         })
 
     if wheel_presence.get('gulf', {}).get('active'):
+        # 11 Oct 2026: category was 'off_wheel_actor' and the text said
+        # OFF-WHEEL. Both were true until the UAE hub shipped this afternoon.
         sigs.append({
-            'level': 'elevated', 'type': 'off_wheel_actor', 'priority': 9,
-            'category': 'off_wheel_actor', 'theatre': 'burkina_faso',
-            'short_text': '\U0001F1E6\U0001F1EA Gulf channel active -- OFF-WHEEL',
+            'level': 'elevated', 'type': 'gulf_channel', 'priority': 9,
+            'category': 'gulf_channel', 'theatre': 'burkina_faso',
+            'short_text': '\U0001F1E6\U0001F1EA Gulf channel active -- feeds the UAE wheel',
             'long_text': wheel_presence['dominant_actor_note'],
         })
 
@@ -1639,14 +1658,39 @@ def scan_burkina_faso_rhetoric(force=False, days=7):
     save_cache(result)
 
     # ── Crosstheater fingerprint -- tier-aware ──
+    # ── uae_spoke (11 Oct 2026) ──────────────────────────────────────
+    # The block spoke_wheel_reader._extract_hub_detail() looks for when the UAE
+    # wheel reads Burkina. Same shape Sudan has emitted since July.
+    #
+    # NO 'trajectory' KEY, DELIBERATELY. Sudan writes
+    #   'trajectory': _tj.get('uae', {}).get('direction', 'holding')
+    # which defaults a missing sensor to 'holding' -- inventing a reading out
+    # of a module that never ran. Burkina has no directional sensor at all:
+    # its directional read is the three-state commercial axis, not
+    # gaining/losing. Omitting the key makes _spoke_trajectory return None,
+    # and the UAE rim renders "no directional sensor" rather than a flat
+    # arrow. Unknown is a state, never a silence.
+    _gulf = (wheel_presence.get('gulf') or {})
     _redis_set(FINGERPRINT_KEY, {
         'ts': result['last_updated'],
         'theatre': 'burkina_faso',
+        'country': 'burkina_faso',
         'node_class': 'tier2_spoke',
         'theatre_level': platform_level,
         'wheel_presence': wheel_presence,
         'commercial_axis_state': commercial_axis['state'],
+        'commercial_axis_capture_score': commercial_axis.get('capture_score'),
+        'commercial_axis_refusal_score': commercial_axis.get('refusal_score'),
         'dominant_actor_on_wheel': wheel_presence['dominant_actor_on_wheel'],
+        'uae_spoke': {
+            'level': LEVEL_TO_PLATFORM.get(_gulf.get('level', 'low'), 0),
+            'role': 'dominant_commercial_counterparty',
+            'axis_state': commercial_axis['state'],
+            # The rim counts this to decide convergence. Dominance is the
+            # leverage variable; tonnage is not.
+            'uae_dominant': bool(_gulf.get('active')),
+            'note': WHEEL_PAGE_NOTES.get('gulf', ''),
+        },
         'tripwires': tripwires[:5],
     }, ttl_hours=14)
 
