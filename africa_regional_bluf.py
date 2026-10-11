@@ -89,7 +89,7 @@ except ImportError:
 # ONE version string, read by the payload, the debug route and every log line.
 # Three hand-maintained copies is how this file spent weeks reporting v1.0.0
 # in /debug while the payload said v1.0.1.
-MODULE_VERSION = '1.1.0'
+MODULE_VERSION = '1.1.1'
 
 UPSTASH_REDIS_URL   = (os.environ.get('UPSTASH_REDIS_URL')
                        or os.environ.get('UPSTASH_REDIS_REST_URL') or '')
@@ -481,7 +481,19 @@ def _normalize_tracker_data(theatre, raw_data):
     # Vector-level backstop: a weighted composite can dilute genuine multi-front
     # activity. Surface the hottest single vector so the rollup does not
     # under-read breadth (mirrors Europe's peak_wheel/peak_vector handling).
-    vector_levels = _safe_dict(raw_data.get('vector_levels'))
+    #
+    # Oct 11 2026 -- DIALECT FIX (v1.1.1). Trackers disagree about what a
+    # vector level IS. Somalia/Sudan/Mali emit integers. Burkina Faso emits
+    # WORDS ('high', 'elevated') because its own page renders words, and a
+    # parallel integer dict for this rollup. Reading the words gave
+    # _safe_int() -> 0 on every vector: the backstop was dead AND
+    # theatre_summary carried words into rhetoric-africa.html, whose card
+    # does parseInt() and filters anything under 1 -- so a country running
+    # two vectors at L3 rendered a single grey 'baseline' pill. A diagnostic
+    # that lies is worse than no diagnostic. Prefer the platform integers;
+    # fall back to the legacy key so the three integer trackers are untouched.
+    vector_levels = _safe_dict(raw_data.get('vector_levels_platform')) \
+                    or _safe_dict(raw_data.get('vector_levels'))
     if vector_levels:
         try:
             peak_vector = max(_safe_int(v) for v in vector_levels.values())

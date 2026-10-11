@@ -1561,9 +1561,20 @@ def scan_burkina_faso_rhetoric(force=False, days=7):
     # find the hottest single vector. Ours are WORDS, so that read silently
     # returns 0 and the backstop is dead for this tracker. Emit both: words for
     # the page, platform integers for the rollup.
-    vector_levels_platform = {
-        k: LEVEL_TO_PLATFORM.get(v, 0) for k, v in vector_levels.items()
-    }
+    #
+    # Oct 11 2026 -- these integers MUST pass through the L5 gate. The raw map
+    # runs to 5 ('rupture') and the BLUF's backstop does
+    # `if peak_vector > threat: threat = peak_vector` -- so an ungated 5 here
+    # would push the whole Africa read to ACTIVE CONFLICT while this tracker's
+    # own theatre_level sat correctly at 4. The gate, defeated by the very dict
+    # built to serve it. 'unread' is OMITTED, not zeroed: unknown is a state,
+    # never a silence, and a 0 would read as "measured, found nothing".
+    vector_levels_platform = {}
+    for _vk, _vv in vector_levels.items():
+        _vp, _vbasis, _vcapped = _to_platform(_vv, l5_gate)
+        if _vp is None:          # 'unread' and anything off-canon
+            continue
+        vector_levels_platform[_vk] = _vp
 
     result = {
         'success': True,
