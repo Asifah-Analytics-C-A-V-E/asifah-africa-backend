@@ -472,43 +472,31 @@ def fetch_gdelt(query, days=7, language='eng', max_records=50):
 # NEWSAPI FETCH
 # ============================================================
 
-def fetch_newsapi(query, days=7):
-    """Fetch NewsAPI articles. Returns [] on missing key / error."""
-    if not NEWSAPI_KEY:
-        return []
-    from_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
-    try:
-        r = requests.get(
-            'https://newsapi.org/v2/everything',
-            params={
-                'q':        query,
-                'from':     from_date,
-                'sortBy':   'publishedAt',
-                'language': 'en',
-                'pageSize': '40',
-                'apiKey':   NEWSAPI_KEY,
-            },
-            timeout=8,
-        )
-        if r.status_code != 200:
-            print(f'[Africa NewsAPI] HTTP {r.status_code} on {query[:60]}')
-            return []
-        data = r.json()
-        out = []
-        for a in (data.get('articles') or []):
-            out.append({
-                'title':       a.get('title', '') or '',
-                'description': a.get('description', '') or '',
-                'url':         a.get('url', ''),
-                'published':   a.get('publishedAt', ''),
-                'source':      (a.get('source') or {}).get('name', 'NewsAPI'),
-                'query':       query,
-            })
-        return out
-    except Exception as e:
-        print(f'[Africa NewsAPI] error: {str(e)[:80]}')
-        return []
+# ── NewsAPI via the shared newsapi_gateway (Oct 18 2026) ──────────────
+# A FALLBACK, not a feed: real requests only when GDELT is blind (or have=
+# says this scan is thin); 24h cache; one 100/day key budgeted across all
+# five backends. [] is never "no news" -- the reason is in the log and at
+# GET /api/newsapi/health. Key: NEWSAPI_GATEWAY_KEY (NEWSAPI_KEY retired).
+try:
+    from newsapi_gateway import newsapi_fetch as _napi_fetch, register_newsapi_routes
+    register_newsapi_routes(app)
+except ImportError:
+    _napi_fetch = None
+    print("[Africa NewsAPI] newsapi_gateway missing -- NewsAPI off (no direct fallback, by design)")
 
+def fetch_newsapi(query, days=7, label=None, have=None):
+    """NewsAPI through the gateway, in this file's dialect."""
+    if _napi_fetch is None:
+        return []
+    return [{
+        'title':       a.get('title', '') or '',
+        'description': a.get('description', '') or '',
+        'url':         a.get('url', ''),
+        'published':   a.get('publishedAt', ''),
+        'source':      (a.get('source') or {}).get('name', 'NewsAPI'),
+        'query':       query,
+    } for a in _napi_fetch(query, days=days, page_size=40, label=label, have=have,
+                           prefix='africa')]
 
 # ============================================================
 # BRAVE SEARCH FALLBACK
