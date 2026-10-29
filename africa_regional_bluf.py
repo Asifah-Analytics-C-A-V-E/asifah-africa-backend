@@ -89,7 +89,7 @@ except ImportError:
 # ONE version string, read by the payload, the debug route and every log line.
 # Three hand-maintained copies is how this file spent weeks reporting v1.0.0
 # in /debug while the payload said v1.0.1.
-MODULE_VERSION = '1.1.1'
+MODULE_VERSION = '1.2.0'
 
 UPSTASH_REDIS_URL   = (os.environ.get('UPSTASH_REDIS_URL')
                        or os.environ.get('UPSTASH_REDIS_REST_URL') or '')
@@ -178,6 +178,99 @@ BLUF_CACHE_KEY      = 'rhetoric:africa:regional_bluf'
 BLUF_CACHE_TTL      = 14 * 3600        # 14h
 BLUF_LASTGOOD_TTL   = 7 * 24 * 3600    # 7d ceiling for held tracker snapshots
 BLUF_INCOMPLETE_TTL = 30 * 60          # 30min when the picture is incomplete
+
+
+# ── HUMANITARIAN CONTEXT (v1.2.0, Oct 29 2026) ─────────────────────────
+# Every country tracker here reads RHETORIC. None reads disease. So an Ebola
+# outbreak spreading from DR Congo into Uganda, Kenya and Nigeria -- the most
+# consequential African development of the month -- never appeared in the
+# Africa regional view at all. The humanitarian detector (ME backend) writes
+# its BLUF to shared Upstash; this reads it.
+#
+# PROSE + PAYLOAD FIELD ONLY, deliberately NOT the signal pool. The GPI already
+# receives these rows from the humanitarian pseudo-region; echoing them into
+# Africa's signals would count the same outbreak twice in the global index.
+HUMANITARIAN_BLUF_KEY = 'humanitarian_convergence:bluf:latest'
+HUMANITARIAN_MAX_AGE_H = 6
+AFRICAN_COUNTRY_CODES = {
+    'drc', 'north_kivu', 'south_kivu', 'ituri', 'congo_brazzaville', 'car', 'bangui',
+    'cameroon', 'gabon', 'chad', 'equatorial_guinea', 'kenya', 'uganda', 'kampala',
+    'tanzania', 'rwanda', 'kigali', 'burundi', 'south_sudan', 'ethiopia', 'tigray', 'amhara',
+    'afar_region', 'somalia', 'somaliland', 'mogadishu', 'eritrea', 'sudan', 'darfur',
+    'el_fasher', 'khartoum', 'nigeria', 'borno_state', 'ghana', 'senegal', 'guinea',
+    'guinea_bissau', 'liberia', 'sierra_leone', 'cote_divoire', 'mali', 'burkina_faso',
+    'niger', 'benin', 'togo', 'gambia', 'mauritania', 'south_africa', 'zambia', 'zimbabwe',
+    'malawi', 'mozambique', 'cabo_delgado', 'botswana', 'namibia', 'angola', 'lesotho',
+    'eswatini', 'madagascar', 'egypt', 'libya', 'tunisia', 'algeria', 'morocco',
+}
+
+
+def _humanitarian_context():
+    """African health / outbreak rows from the humanitarian detector's BLUF.
+
+    Returns {'status', 'age_h', 'rows': [...]} -- status is 'ok', 'stale',
+    'absent' or 'error'. Absence is reported, never rendered as 'no outbreak'.
+    """
+    try:
+        hb = _redis_get(HUMANITARIAN_BLUF_KEY)
+    except Exception as e:
+        return {'status': 'error', 'error': str(e)[:120], 'rows': []}
+    if not isinstance(hb, dict):
+        return {'status': 'absent', 'rows': []}
+    age_h = None
+    try:
+        ts = hb.get('updated_at')
+        if ts:
+            age_h = round((datetime.now(timezone.utc) - datetime.fromisoformat(ts))
+                          .total_seconds() / 3600.0, 1)
+    except Exception:
+        pass
+    rows = []
+    for sg in _safe_list(hb.get('signals')):
+        if not isinstance(sg, dict):
+            continue
+        cat = sg.get('category')
+        if cat == 'outbreak_spread' or (
+                cat == 'health_emergency' and sg.get('country') in AFRICAN_COUNTRY_CODES
+                and _safe_int(sg.get('level')) >= 4 and not sg.get('watch_only')):
+            rows.append({'category': cat, 'country': sg.get('country'),
+                         'level': _safe_int(sg.get('level')),
+                         'short_text': _safe_str(sg.get('short_text')),
+                         'long_text': _safe_str(sg.get('long_text')),
+                         'outbreak_spread': sg.get('outbreak_spread')})
+    stale = age_h is not None and age_h > HUMANITARIAN_MAX_AGE_H
+    return {'status': 'stale' if stale else 'ok', 'age_h': age_h, 'rows': rows[:6]}
+
+
+def _humanitarian_sentence(ctx):
+    """One prose sentence for the regional BLUF, or '' when there is nothing to say."""
+    rows = _safe_list((ctx or {}).get('rows'))
+    spread = [r for r in rows if r.get('category') == 'outbreak_spread']
+    if spread:
+        osp = _safe_dict(spread[0].get('outbreak_spread'))
+        nodes = _safe_list(osp.get('nodes'))
+        names = ', '.join(_safe_str(n.get('label')) for n in nodes if isinstance(n, dict))
+        far = [_safe_str(n.get('label')) for n in nodes
+               if isinstance(n, dict) and n.get('contiguous') is False]
+        s = ('Outside the rhetoric trackers: %s is spreading beyond %s, with confirmed '
+             'coverage in %s' % (_safe_str(osp.get('disease_name'), 'an outbreak'),
+                                 _safe_str(osp.get('epicentre_label'))
+                                 or _safe_str(osp.get('epicentre'), 'its epicentre').replace('_', ' ').title(),
+                                 names or 'neighbouring states'))
+        if far:
+            s += ('; %s border%s no affected country, which reads as travel-route '
+                  'importation rather than border spread' % (', '.join(far),
+                                                             's' if len(far) == 1 else ''))
+        s += ' (humanitarian detector).'
+        if ctx.get('status') == 'stale':
+            s += ' Health read is %.0fh old.' % (ctx.get('age_h') or 0)
+        return s
+    if rows:
+        return ('Outside the rhetoric trackers, the humanitarian detector carries %d '
+                'African health emergency row%s at L4+ (%s).'
+                % (len(rows), '' if len(rows) == 1 else 's',
+                   '; '.join(r['short_text'][:70] for r in rows[:2])))
+    return ''
 
 
 def _lastgood_key(theatre):
@@ -1219,6 +1312,11 @@ def build_regional_bluf(force=False):
 
         posture     = _determine_regional_posture(trackers)
         bluf        = _build_bluf_prose(posture, trackers, trackers_missing)
+        # v1.2.0 -- disease context the rhetoric trackers cannot see.
+        hctx        = _humanitarian_context()
+        _hs         = _humanitarian_sentence(hctx)
+        if _hs:
+            bluf = bluf + ' ' + _hs
         all_signals = _build_signals(posture, trackers)
         top_signals = all_signals[:TOP_SIGNALS_COUNT]
         trackers_live = len(trackers)
@@ -1287,6 +1385,10 @@ def build_regional_bluf(force=False):
             'trackers_missing':   trackers_missing,
             'picture_complete':   (len(trackers_missing) == 0),
             'convergence_panel':  _build_convergence_panel(),
+            # v1.2.0 -- outbreak / health rows read from the humanitarian
+            # detector. Context only: NOT in `signals`, so the GPI never
+            # counts the same outbreak twice.
+            'humanitarian_context': hctx,
             'theatre_summary':    theatre_summary,
             'generated_at':       datetime.now(timezone.utc).isoformat(),
             'version':            MODULE_VERSION,
