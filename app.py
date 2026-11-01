@@ -178,7 +178,10 @@ except ImportError as e:
     print(f"[Africa] ⚠️ africa_regional_bluf not yet available: {e}")
 
 try:
-    
+    # Nov 1 2026: this import line had gone missing (blank line here), so the
+    # flag said True, registration raised NameError, and Nigeria stability never
+    # registered. Restored.
+    from nigeria_stability import register_nigeria_stability_endpoints
     NIGERIA_STABILITY_AVAILABLE = True
     print("[Africa] ✅ nigeria_stability loaded")
 except ImportError as e:
