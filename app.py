@@ -242,9 +242,26 @@ RENDER_DEPLOY_TAG  = 'asifa-africa-backend'
 # July. A version that disagrees with itself cannot answer "which build is
 # live?", which is the only question it exists to answer.
 # Both now derive from this line. Bump it here and every surface follows.
-AFRICA_BACKEND_VERSION = '1.3.1'
+AFRICA_BACKEND_VERSION = '1.4.0'
 ASIFAH_USER_AGENT = (f"AsifahAnalytics-AF/{AFRICA_BACKEND_VERSION} "
                      f"(OSINT monitoring tool; +https://asifahanalytics.com)")
+
+# ── v1.4.0 (Nov 1 2026) public ?force gate ─────────────────────────────
+# ?force=true on a public endpoint ran a live scan for anyone on the internet.
+# Now: one forced rescan per endpoint path per 15 minutes (Upstash SET NX EX).
+# Inside the window the request gets the cache. No Redis -> allowed (fail-open).
+def _public_force_allowed(key):
+    _url = os.environ.get('UPSTASH_REDIS_URL')
+    _tok = os.environ.get('UPSTASH_REDIS_TOKEN')
+    if not (_url and _tok):
+        return True
+    try:
+        _r = requests.get(f"{_url}/set/force_gate:africa:{key.strip('/').replace('/', ':')}/1/NX/EX/900",
+                          headers={'Authorization': f'Bearer {_tok}'}, timeout=4)
+        return _r.json().get('result') == 'OK'
+    except Exception:
+        return True
+
 
 # /tmp fallback cache directory
 FILE_CACHE_DIR = Path('/tmp/africa_cache')
@@ -1885,7 +1902,7 @@ def api_africa_threat(country):
             'available_countries': list(COUNTRY_CONFIG.keys()),
         }), 404
 
-    force = request.args.get('force', 'false').lower() == 'true'
+    force = (request.args.get('force', 'false').lower() == 'true' and _public_force_allowed(request.path))
     cache_key = f'africa_country:{country}'
 
     if not force:
@@ -2137,7 +2154,7 @@ def _run_africa_travel_advisory_scan():
 def api_africa_travel_advisories():
     """Return U.S. State Dept travel advisories for Africa targets. Cached 24h."""
     try:
-        force = request.args.get('force', 'false').lower() == 'true'
+        force = (request.args.get('force', 'false').lower() == 'true' and _public_force_allowed(request.path))
         now = time.time()
 
         if (not force
@@ -2175,194 +2192,15 @@ def api_africa_travel_advisories():
         return jsonify({'success': False, 'error': str(e), 'advisories': {}}), 500
 
 
-# ─────────────────────────────────────────────────────────────
-# NOTAMs — Live FAA API (ME canonical pattern)
-# /api/africa/notams
-# Source: https://external-api.faa.gov/notamapi/v1/notams
-# ─────────────────────────────────────────────────────────────
+# (Nov 1 2026) Old FAA NOTAM API code removed (no credentials, never read).
+# /api/africa/notams is served by airspace_watch.py.
 
 # African FIR ICAO codes — covers all 14 target countries + key neighbors
-AFRICA_FIRS = {
-    'DFFF': {'country': 'Burkina Faso',  'flag': '🇧🇫', 'name': 'Ouagadougou FIR'},
-    'FZZA': {'country': 'DRC',            'flag': '🇨🇩', 'name': 'Kinshasa FIR'},
-    'HAAA': {'country': 'Ethiopia',       'flag': '🇪🇹', 'name': 'Addis Ababa FIR'},
-    'HKNA': {'country': 'Kenya',          'flag': '🇰🇪', 'name': 'Nairobi FIR'},
-    'GABS': {'country': 'Mali',           'flag': '🇲🇱', 'name': 'Bamako FIR'},
-    'DRRR': {'country': 'Niger',          'flag': '🇳🇪', 'name': 'Niamey FIR'},
-    'DNKK': {'country': 'Nigeria',        'flag': '🇳🇬', 'name': 'Kano FIR'},
-    'DNAA': {'country': 'Nigeria',        'flag': '🇳🇬', 'name': 'Abuja FIR'},
-    'HRYR': {'country': 'Rwanda',         'flag': '🇷🇼', 'name': 'Kigali FIR'},
-    'HCMM': {'country': 'Somalia',        'flag': '🇸🇴', 'name': 'Mogadishu FIR'},
-    'FAJS': {'country': 'South Africa',   'flag': '🇿🇦', 'name': 'Johannesburg FIR'},
-    'HJJJ': {'country': 'South Sudan',    'flag': '🇸🇸', 'name': 'Juba FIR'},
-    'HSSS': {'country': 'Sudan',          'flag': '🇸🇩', 'name': 'Khartoum FIR'},
-    'HUEN': {'country': 'Uganda',         'flag': '🇺🇬', 'name': 'Entebbe FIR'},
-    'FTTT': {'country': 'Chad',           'flag': '🇹🇩', 'name': "N'Djamena FIR"},
-    'FMMM': {'country': 'Madagascar',     'flag': '🇲🇬', 'name': 'Antananarivo FIR'},
-    'FQBE': {'country': 'Mozambique',     'flag': '🇲🇿', 'name': 'Beira FIR'},
-    # Multi-country FIRs (ASECNA / joint) — cover new targets without own FIR
-    'FCCC': {'country': 'Central Africa', 'flag': '🇨🇫', 'name': 'Brazzaville FIR (CAR / Eq. Guinea / Congo / Gabon)'},
-    'GLRB': {'country': 'West Africa',    'flag': '🇬🇳', 'name': 'Roberts FIR (Guinea / Liberia / Sierra Leone)'},
-    # Neighboring FIRs (high-context spillover)
-    'HLLL': {'country': 'Libya',          'flag': '🇱🇾', 'name': 'Tripoli FIR'},
-    'GMMM': {'country': 'Morocco',        'flag': '🇲🇦', 'name': 'Casablanca FIR'},
-    'HECC': {'country': 'Egypt',          'flag': '🇪🇬', 'name': 'Cairo FIR'},
-}
-
-_africa_notam_cache = {'data': None, 'fetched_at': None, 'ttl': 6 * 3600}  # 6h
 
 
-def _parse_africa_notam(notam_data, location_info):
-    """Parse a single FAA NOTAM into structured format."""
-    try:
-        notam_text = notam_data.get('notamText', '').upper()
-
-        notam_type = 'OTHER'
-        icon = '📋'
-        color = 'gray'
-
-        if any(word in notam_text for word in ['AIRSPACE CLOSED', 'AIRSPACE CLO', 'FIR CLOSED']):
-            notam_type = 'AIRSPACE CLOSURE'
-            icon = '⛔'
-            color = 'red'
-        elif any(word in notam_text for word in ['RESTRICTED', 'PROHIBITED', 'DANGER AREA']):
-            notam_type = 'FLIGHT RESTRICTION'
-            icon = '🚫'
-            color = 'orange'
-        elif any(word in notam_text for word in ['MILITARY', 'MIL ACT', 'EXERCISE']):
-            notam_type = 'MILITARY ACTIVITY'
-            icon = '⚠️'
-            color = 'yellow'
-        elif any(word in notam_text for word in ['AIRPORT CLOSED', 'AD CLOSED', 'RWY CLOSED']):
-            notam_type = 'AIRPORT CLOSURE'
-            icon = '🛑'
-            color = 'purple'
-        elif any(word in notam_text for word in ['NAVAID', 'VOR', 'DME', 'ILS', 'U/S']):
-            notam_type = 'NAVAID OUTAGE'
-            icon = '📡'
-            color = 'blue'
-        elif any(word in notam_text for word in ['VOLCANIC', 'ASH', 'HAZARD', 'OBSTRUCTION']):
-            notam_type = 'HAZARD'
-            icon = '⚠️'
-            color = 'gray'
-
-        effective_date = notam_data.get('effectiveStart', '')
-        expiry_date = notam_data.get('effectiveEnd', '')
-
-        effective_formatted = ''
-        expiry_formatted = ''
-
-        if effective_date:
-            try:
-                eff_dt = datetime.fromisoformat(effective_date.replace('Z', '+00:00'))
-                effective_formatted = eff_dt.strftime('%b %d, %Y')
-            except Exception:
-                effective_formatted = effective_date[:10]
-
-        if expiry_date:
-            try:
-                exp_dt = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
-                expiry_formatted = exp_dt.strftime('%b %d, %Y')
-            except Exception:
-                expiry_formatted = expiry_date[:10]
-
-        summary = notam_text[:150].strip()
-        if len(notam_text) > 150:
-            summary += '...'
-
-        notam_id = notam_data.get('notamID', 'N/A')
-
-        return {
-            'id':              notam_id,
-            'country':         location_info['country'],
-            'flag':            location_info['flag'],
-            'fir':             location_info['name'],
-            'type':            notam_type,
-            'classification':  notam_type,
-            'icon':            icon,
-            'color':           color,
-            'summary':         summary,
-            'effective_date':  effective_formatted,
-            'expiry_date':     expiry_formatted,
-            'effective':       effective_formatted or 'Immediately',
-            'valid_range':     f"{effective_formatted} - {expiry_formatted}" if expiry_formatted else f"From {effective_formatted}",
-            'notam_text':      notam_text,
-            'source_url':      f"https://notams.aim.faa.gov/notamSearch/notam.html?id={notam_id}",
-        }
-    except Exception as e:
-        print(f"[Africa NOTAM] parse error: {e}")
-        return None
 
 
-@app.route('/api/africa/notams', methods=['GET'])
-def api_africa_notams():
-    """Fetch active NOTAMs for African airspace (live FAA API)."""
-    try:
-        force = request.args.get('force', 'false').lower() == 'true'
-        now = time.time()
 
-        if (not force
-                and _africa_notam_cache['data'] is not None
-                and _africa_notam_cache['fetched_at'] is not None
-                and (now - _africa_notam_cache['fetched_at']) < _africa_notam_cache['ttl']):
-            cached = _africa_notam_cache['data'].copy()
-            cached['cached'] = True
-            return jsonify(cached)
-
-        notams = []
-        base_url = "https://external-api.faa.gov/notamapi/v1/notams"
-
-        for icao_code, info in AFRICA_FIRS.items():
-            try:
-                params = {
-                    'locationICAOId': icao_code,
-                    'responseType':   'application/json',
-                }
-                response = requests.get(base_url, params=params, timeout=5)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('notamList'):
-                        for notam in data['notamList']:
-                            parsed = _parse_africa_notam(notam, info)
-                            if parsed:
-                                notams.append(parsed)
-                time.sleep(0.2)  # rate limit politeness
-            except Exception as e:
-                print(f"[Africa NOTAM] {icao_code} fetch error: {e}")
-                continue
-
-        priority_order = {
-            'AIRSPACE CLOSURE':   1,
-            'FLIGHT RESTRICTION': 2,
-            'MILITARY ACTIVITY':  3,
-            'AIRPORT CLOSURE':    4,
-            'NAVAID OUTAGE':      5,
-            'HAZARD':             6,
-            'OTHER':              7,
-        }
-        notams.sort(key=lambda x: (priority_order.get(x['type'], 99), x.get('effective_date', '')))
-
-        result = {
-            'success':      True,
-            'notams':       notams,
-            'count':        len(notams),
-            'last_updated': datetime.now(timezone.utc).isoformat(),
-            'cached':       False,
-        }
-
-        _africa_notam_cache['data']       = result
-        _africa_notam_cache['fetched_at'] = now
-
-        return jsonify(result)
-
-    except Exception as e:
-        print(f"[Africa NOTAM] Endpoint error: {e}")
-        if _africa_notam_cache['data'] is not None:
-            stale = _africa_notam_cache['data'].copy()
-            stale['cached'] = True
-            stale['stale'] = True
-            return jsonify(stale)
-        return jsonify({'success': False, 'notams': [], 'count': 0, 'error': str(e)}), 500
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2477,7 +2315,7 @@ _AFRICA_FLIGHT_BASELINE = [
 def api_africa_flights():
     """Return active flight disruptions for Africa (curated baseline)."""
     try:
-        force = request.args.get('force', 'false').lower() == 'true'
+        force = (request.args.get('force', 'false').lower() == 'true' and _public_force_allowed(request.path))
         now = time.time()
 
         if (not force
@@ -2619,7 +2457,7 @@ if BURKINA_RHETORIC_AVAILABLE:
 _start_background_refresh()
 
 print('=' * 60)
-print(f'  ASIFAH AFRICA BACKEND v1.0.0 -- BOOT COMPLETE')
+print('  ASIFAH AFRICA BACKEND v1.0.0 -- BOOT COMPLETE')
 print(f'  Countries: {len(COUNTRY_CONFIG)} ({", ".join(COUNTRY_CONFIG.keys())})')
 print(f'  Redis:     {"✅ configured" if UPSTASH_REDIS_URL else "⚠️  not configured"}')
 print(f'  NewsAPI:   {"✅ gateway (fallback)" if (_napi_fetch and os.environ.get("NEWSAPI_GATEWAY_KEY")) else "⚠️  not configured"}')
@@ -2635,6 +2473,16 @@ _bf_mods = [BURKINA_HUMANITARIAN_AVAILABLE, BURKINA_FINANCIAL_AVAILABLE,
 print(f'  Burkina:   {"✅ humanitarian + financial + rhetoric" if all(_bf_mods) else f"⏳ {sum(_bf_mods)}/3 loaded"}')
 print('=' * 60)
 
+
+
+# ── Airspace Watch (shared module, Nov 1 2026) ─────────────────────────
+# Replaces the old FAA NOTAM code (dead: FAA API called without credentials). Same file on all five
+# backends; this backend sees only its own regions.
+try:
+    from airspace_watch import register_airspace_endpoints
+    register_airspace_endpoints(app, 'africa', legacy_route='/api/africa/notams')
+except Exception as _e:
+    print(f"[Africa] ⚠️ Airspace Watch unavailable: {_e}")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
