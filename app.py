@@ -242,10 +242,11 @@ RENDER_DEPLOY_TAG  = 'asifa-africa-backend'
 # July. A version that disagrees with itself cannot answer "which build is
 # live?", which is the only question it exists to answer.
 # Both now derive from this line. Bump it here and every surface follows.
-AFRICA_BACKEND_VERSION = '1.4.0'
+AFRICA_BACKEND_VERSION = '1.5.0'
 ASIFAH_USER_AGENT = (f"AsifahAnalytics-AF/{AFRICA_BACKEND_VERSION} "
                      f"(OSINT monitoring tool; +https://asifahanalytics.com)")
 
+# ── v1.5.0 (Nov 1 2026) flights: live Flight Watch replaces the curated May list.
 # ── v1.4.0 (Nov 1 2026) public ?force gate ─────────────────────────────
 # ?force=true on a public endpoint ran a live scan for anyone on the internet.
 # Now: one forced rescan per endpoint path per 15 minutes (Upstash SET NX EX).
@@ -2203,146 +2204,8 @@ def api_africa_travel_advisories():
 
 
 
-# ─────────────────────────────────────────────────────────────
-# FLIGHT DISRUPTIONS — curated baseline (no live API exists yet)
-# /api/africa/flights
-# Round 4+ will replace with live aggregator
-# ─────────────────────────────────────────────────────────────
-
-_africa_flights_cache = {'data': None, 'fetched_at': None, 'ttl': 12 * 3600}  # 12h
-
-_AFRICA_FLIGHT_BASELINE = [
-    {
-        'airline':     'Lufthansa',
-        'route':       'Frankfurt — Khartoum (KRT)',
-        'destination': 'Khartoum',
-        'status':      'Suspended',
-        'headline':    'Khartoum service suspended indefinitely since April 2023 conflict.',
-        'date':        '2023-04-15',
-        'duration':    'Indefinite',
-        'reason':      'Active conflict / airport non-operational',
-        'source_url':  'https://www.lufthansa.com/',
-        'data_as_of':  '2026-05-24',
-    },
-    {
-        'airline':     'Air France',
-        'route':       'Paris — Bamako (BKO)',
-        'destination': 'Bamako',
-        'status':      'Suspended',
-        'headline':    'Air France Bamako service suspended; codeshare reroute via Air Algérie not currently active.',
-        'date':        '2024-01-10',
-        'duration':    'Indefinite',
-        'reason':      'Political tensions / security situation',
-        'source_url':  'https://www.airfrance.fr/',
-        'data_as_of':  '2026-05-24',
-    },
-    {
-        'airline':     'Air France',
-        'route':       'Paris — Niamey (NIM)',
-        'destination': 'Niamey',
-        'status':      'Suspended',
-        'headline':    'Air France Niamey service suspended since 2023 coup.',
-        'date':        '2023-08-01',
-        'duration':    'Indefinite',
-        'reason':      'Diplomatic situation post-coup',
-        'source_url':  'https://www.airfrance.fr/',
-        'data_as_of':  '2026-05-24',
-    },
-    {
-        'airline':     'Brussels Airlines',
-        'route':       'Brussels — Kinshasa (FIH)',
-        'destination': 'Kinshasa',
-        'status':      'Disrupted',
-        'headline':    'Kinshasa service operating with enhanced screening; Goma operations suspended.',
-        'date':        '2026-05-15',
-        'duration':    'Ongoing',
-        'reason':      'Ebola Bundibugyo PHEIC — health screening',
-        'source_url':  'https://www.brusselsairlines.com/',
-        'data_as_of':  '2026-05-24',
-    },
-    {
-        'airline':     'Kenya Airways',
-        'route':       'Nairobi — Goma (GOM)',
-        'destination': 'Goma',
-        'status':      'Suspended',
-        'headline':    'Goma service suspended due to Ebola quarantine zone + M23 security situation.',
-        'date':        '2026-05-15',
-        'duration':    'Indefinite',
-        'reason':      'Ebola PHEIC + conflict',
-        'source_url':  'https://www.kenya-airways.com/',
-        'data_as_of':  '2026-05-24',
-    },
-    {
-        'airline':     'RwandAir',
-        'route':       'Kigali — Goma (GOM)',
-        'destination': 'Goma',
-        'status':      'Suspended',
-        'headline':    'Kigali-Goma service suspended; DRC-Rwanda border partial closure.',
-        'date':        '2026-05-18',
-        'duration':    'Indefinite',
-        'reason':      'Ebola PHEIC + diplomatic tensions',
-        'source_url':  'https://www.rwandair.com/',
-        'data_as_of':  '2026-05-24',
-    },
-    {
-        'airline':     'Ethiopian Airlines',
-        'route':       'Addis Ababa — Mogadishu (MGQ)',
-        'destination': 'Mogadishu',
-        'status':      'Disrupted',
-        'headline':    'Mogadishu operations continue with enhanced security; periodic schedule changes.',
-        'date':        '2026-05-01',
-        'duration':    'Ongoing',
-        'reason':      'Al-Shabaab security situation',
-        'source_url':  'https://www.ethiopianairlines.com/',
-        'data_as_of':  '2026-05-24',
-    },
-    {
-        'airline':     'EgyptAir',
-        'route':       'Cairo — Khartoum (KRT)',
-        'destination': 'Khartoum',
-        'status':      'Suspended',
-        'headline':    'EgyptAir Khartoum service remains suspended; humanitarian charter ops only.',
-        'date':        '2023-04-15',
-        'duration':    'Indefinite',
-        'reason':      'Sudan conflict',
-        'source_url':  'https://www.egyptair.com/',
-        'data_as_of':  '2026-05-24',
-    },
-]
-
-
-@app.route('/api/africa/flights', methods=['GET'])
-def api_africa_flights():
-    """Return active flight disruptions for Africa (curated baseline)."""
-    try:
-        force = (request.args.get('force', 'false').lower() == 'true' and _public_force_allowed(request.path))
-        now = time.time()
-
-        if (not force
-                and _africa_flights_cache['data'] is not None
-                and _africa_flights_cache['fetched_at'] is not None
-                and (now - _africa_flights_cache['fetched_at']) < _africa_flights_cache['ttl']):
-            cached = _africa_flights_cache['data'].copy()
-            cached['cached'] = True
-            return jsonify(cached)
-
-        result = {
-            'success':       True,
-            'count':         len(_AFRICA_FLIGHT_BASELINE),
-            'disruptions':   _AFRICA_FLIGHT_BASELINE,
-            'last_updated':  datetime.now(timezone.utc).isoformat(),
-            'source':        'curated baseline + planned live aggregator',
-            'cached':        False,
-        }
-
-        _africa_flights_cache['data']       = result
-        _africa_flights_cache['fetched_at'] = now
-
-        return jsonify(result)
-
-    except Exception as e:
-        print(f"[Africa Flights] Endpoint error: {e}")
-        return jsonify({'success': False, 'disruptions': [], 'count': 0, 'error': str(e)}), 500
+# (Nov 1 2026) The curated May-24 flight list and /api/africa/flights moved to
+# flight_watch.py: live scan + the old list as a labelled "standing" strip.
 
 
 # ============================================================
@@ -2483,6 +2346,17 @@ try:
     register_airspace_endpoints(app, 'africa', legacy_route='/api/africa/notams')
 except Exception as _e:
     print(f"[Africa] ⚠️ Airspace Watch unavailable: {_e}")
+
+
+# ── Flight Watch (shared module, Nov 1 2026) ───────────────────────────
+# Live airline suspensions / cancellations / declared end dates / resumptions from
+# Google News, leader-only every 6 h. Same file on all five backends; this backend
+# sees only its own destinations. Requests only ever read the Redis cache.
+try:
+    from flight_watch import register_flight_endpoints
+    register_flight_endpoints(app, 'africa', legacy_routes=['/api/africa/flights'])
+except Exception as _e:
+    print(f"[Africa] ⚠️ Flight Watch unavailable: {_e}")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
