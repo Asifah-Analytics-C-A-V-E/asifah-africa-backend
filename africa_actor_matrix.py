@@ -36,12 +36,22 @@ ENDPOINTS
   /api/africa/actor-matrix/debug         per tracker: actors, vectors, which pairs read them
 
 Cost: Redis reads only (4 trackers), cached 15 min. No external fetch, ever.
+
+v1.1.0 (Nov 2 2026, after the first live /debug):
+  - Burkina 'junta_consolidation' mixes the junta tightening control with coup
+    counter-plots; the row said "Internal challengers -> Traore", which overstated
+    the challengers. Now "Junta consolidation vs coup plots" (kind: counter).
+  - Burkina 'commercial_capture' (live L4, previously unused) becomes a patron
+    row: "Gulf gold buyers -> Burkina gold".
+  - The Mali, Somalia and Sudan trackers gained co-occurrence matching
+    (africa_signal_matcher.py); rows that read 0 because the trackers' exact
+    phrases never matched should now carry real levels.
 """
 
 import time
 from datetime import datetime, timezone
 
-MATRIX_VERSION = '1.0.0'
+MATRIX_VERSION = '1.1.0'
 CACHE_KEY = 'actor_matrix:africa:latest'
 PREV_KEY = 'actor_matrix:africa:previous_levels'
 CACHE_SEC = 15 * 60
@@ -115,8 +125,13 @@ PAIRS = [
        [('vector', 'burkina_faso', 'insurgent_contest')], 'burkina_faso'),
     _P('russia>bf', 'patron', 'Russia', RU, 'Burkina junta (alignment)', BF, ['burkina_faso', 'russia'],
        [('vector', 'burkina_faso', 'external_alignment')], 'burkina_faso'),
-    _P('plotters>bf', 'offensive', 'Internal challengers (coup plots)', '⚔️', 'Traoré junta', BF, ['burkina_faso'],
-       [('vector', 'burkina_faso', 'junta_consolidation')], 'burkina_faso'),
+    _P('plotters>bf', 'counter', 'Junta consolidation vs coup plots', BF, 'Traoré regime', BF, ['burkina_faso'],
+       [('vector', 'burkina_faso', 'junta_consolidation')], 'burkina_faso',
+       note='One vector carries both the junta tightening control and counter-plot activity; a high reading means '
+            'the regime is under internal pressure or cracking down, not necessarily that challengers are winning.'),
+    _P('gold>bf', 'patron', 'Gulf gold buyers', AE, 'Burkina gold (commercial capture)', BF, ['burkina_faso', 'uae'],
+       [('vector', 'burkina_faso', 'commercial_capture')], 'burkina_faso',
+       note='Who buys the gold is who funds the junta. Reads the Burkina tracker\'s commercial-capture axis.'),
 ]
 
 CARD_ALIASES = {'burkina': 'burkina_faso', 'south-sudan': 'south_sudan'}

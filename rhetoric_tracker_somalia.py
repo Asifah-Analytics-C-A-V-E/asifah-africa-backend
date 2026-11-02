@@ -692,6 +692,30 @@ RHETORIC_RSS_FEEDS = [
     ("https://news.google.com/rss/search?q=Soomaaliya+Shabaab+OR+dowlad&hl=en&gl=US&ceid=US:en", 0.8),
     # Arabic
     ("https://news.google.com/rss/search?q=%D8%A7%D9%84%D8%B5%D9%88%D9%85%D8%A7%D9%84+%D8%A7%D9%84%D8%B4%D8%A8%D8%A7%D8%A8&hl=ar&gl=SA&ceid=SA:ar", 0.85),
+
+    # ── WIDENED Nov 2 2026 ────────────────────────────────────────────
+    # The live Nov 2 scan returned 26 articles in 3 days -- against Mali's 332.
+    # Every query above is a multi-term search, and multi-term searches on an
+    # under-reported theatre match almost nothing. Mali fixed the same problem in
+    # July with broad country terms plus LOCAL outlets; this mirrors it.
+    ("https://news.google.com/rss/search?q=Somalia&hl=en&gl=US&ceid=US:en", 0.85),
+    ("https://news.google.com/rss/search?q=Mogadishu&hl=en&gl=US&ceid=US:en", 0.9),
+    ("https://news.google.com/rss/search?q=al-Shabaab&hl=en&gl=US&ceid=US:en", 1.0),
+    ("https://news.google.com/rss/search?q=Puntland+OR+Jubaland&hl=en&gl=US&ceid=US:en", 0.85),
+    ("https://news.google.com/rss/search?q=Somaliland&hl=en&gl=US&ceid=US:en", 0.85),
+    # Somali national / local press -- report security incidents the wires skip
+    ("https://news.google.com/rss/search?q=site:hiiraan.com&hl=en&gl=US&ceid=US:en", 1.0),
+    ("https://news.google.com/rss/search?q=site:garoweonline.com&hl=en&gl=US&ceid=US:en", 1.0),
+    ("https://news.google.com/rss/search?q=site:somaliguardian.com&hl=en&gl=US&ceid=US:en", 0.95),
+    ("https://news.google.com/rss/search?q=site:hornobserver.com&hl=en&gl=US&ceid=US:en", 0.9),
+    ("https://news.google.com/rss/search?q=site:caasimada.net&hl=en&gl=US&ceid=US:en", 0.9),
+    ("https://news.google.com/rss/search?q=site:sonna.so&hl=en&gl=US&ceid=US:en", 0.8),
+    # Regional / specialist
+    ("https://news.google.com/rss/search?q=site:voasomali.com+OR+site:voanews.com+Somalia&hl=en&gl=US&ceid=US:en", 0.9),
+    ("https://news.google.com/rss/search?q=site:theeastafrican.co.ke+Somalia&hl=en&gl=US&ceid=US:en", 0.9),
+    # Arabic lane, broad
+    ("https://news.google.com/rss/search?q=%D8%A7%D9%84%D8%B5%D9%88%D9%85%D8%A7%D9%84&hl=ar&gl=SA&ceid=SA:ar", 0.85),
+    ("https://news.google.com/rss/search?q=%D9%85%D9%82%D8%AF%D9%8A%D8%B4%D9%88&hl=ar&gl=SA&ceid=SA:ar", 0.85),
 ]
 
 SOMALIA_SUBREDDITS = ['Somalia', 'HornOfAfrica', 'geopolitics', 'CredibleDefense']
@@ -781,7 +805,8 @@ def fetch_rhetoric_articles(days=3):
                     'url': url,
                     'published': pub_str if isinstance(pub_str, str) else '',
                     'description': desc[:300],
-                    'source': feed_url.split('q=')[1].split('&')[0] if 'q=' in feed_url else 'RSS',
+                    # Nov 2 2026: the outlet, not the URL-encoded search string
+                    'source': (title.rsplit(' - ', 1)[1].strip() if ' - ' in title else 'GoogleNews'),
                     'source_type': 'rss',
                     'weight': weight,
                 })
@@ -1437,6 +1462,30 @@ def run_somalia_rhetoric_scan(days=3):
     articles = fetch_rhetoric_articles(days)
     actor_results, theatre_summary = classify_articles(articles)
 
+    # ── v1.1.0 (Nov 2 2026): CO-OCCURRENCE MATCHING + CORPUS HEALTH ──────
+    # Exact phrases ('shabaab attack') miss real headlines ("Al-Shabaab fighters
+    # attack..."). africa_signal_matcher reads actor + event in the same headline
+    # (EN/AR), needs 2+ outlets for L3+, and only ever RAISES a vector.
+    # Corpus health: on Nov 2 a 26-article corpus produced "al-Shabaab 86% below
+    # baseline -- operational-security quiet". The quiet was in our feeds, not in
+    # al-Shabaab. Silence reads now require a healthy corpus.
+    cooc_report = None
+    corpus_health = {'status': 'unknown', 'article_count': len(articles), 'baseline': None,
+                     'note': 'africa_signal_matcher not installed -- corpus health not assessed'}
+    try:
+        from africa_signal_matcher import apply_cooccurrence, assess_corpus
+        cooc_report = apply_cooccurrence('somalia', articles, actor_results, theatre_summary, ACTOR_KEYWORDS)
+        print("[Somalia Rhetoric] Co-occurrence: " + (", ".join(
+            "%s %s->%s" % (v, d['before'], d['after'])
+            for v, d in cooc_report['vectors'].items() if d['after'] != d['before']) or "no change"))
+        corpus_health = assess_corpus('somalia', len(articles), _redis_get,
+                                      lambda k, v: _redis_set(k, v, ttl=60 * 24 * 3600))
+        print("[Somalia Rhetoric] Corpus: %s -- %s" % (corpus_health['status'], corpus_health['note']))
+    except ImportError:
+        print("[Somalia Rhetoric] africa_signal_matcher not installed -- exact phrases only")
+    except Exception as e:
+        print("[Somalia Rhetoric] Co-occurrence/corpus error: %s" % str(e)[:120])
+
     # Escalatory theatre level = max across escalatory vectors (diplomacy excluded)
     max_shabaab    = theatre_summary['shabaab_max']
     max_isis       = theatre_summary['isis_max']
@@ -1446,10 +1495,15 @@ def run_somalia_rhetoric_scan(days=3):
     max_patron     = theatre_summary['patron_max']
     max_somaliland = theatre_summary['somaliland_max']
     max_maritime   = theatre_summary['maritime_max']
-    theatre_escalation_level = max(
-        max_shabaab, max_isis, max_fracture, max_aussom,
-        max_africom, max_patron, max_somaliland, max_maritime,
-    )
+    # Nov 2 2026 -- L5 "Active Conflict" belongs to Somalia's WAR (al-Shabaab,
+    # ISIS, federal fracture, the AU security floor, US strikes). Piracy,
+    # Somaliland recognition and foreign patrons are real pressure but cannot by
+    # themselves put the country at L5: on Nov 2 one piracy headline did exactly
+    # that, while al-Shabaab read L1. Side vectors are capped at L4 here; their
+    # own vector levels are reported unchanged.
+    _core_level = max(max_shabaab, max_isis, max_fracture, max_aussom, max_africom)
+    _side_level = min(4, max(max_patron, max_somaliland, max_maritime))
+    theatre_escalation_level = max(_core_level, _side_level)
 
     spec_scores = theatre_summary.get('specificity_scores', [])
     theatre_specificity = round(sum(spec_scores) / len(spec_scores), 1) if spec_scores else 0
@@ -1515,6 +1569,10 @@ def run_somalia_rhetoric_scan(days=3):
         },
         'diplomatic_level': diplomatic_level,
         'diplomatic_modifier': diplomatic_modifier,
+        'theatre_level_basis': ('core war vectors' if _core_level >= _side_level
+                                else 'side vectors (piracy / recognition / patrons), capped at L4'),
+        'corpus_health': corpus_health,
+        'cooccurrence': cooc_report,
         'actors': actor_results,
         'conditional_threats': theatre_summary.get('conditional_threats', [])[:8],
         'crosstheater_coordination': [],
@@ -1522,8 +1580,15 @@ def run_somalia_rhetoric_scan(days=3):
     }
 
     # ── Actor baselines + silence anomalies (mode='actor') ──
-    baselines = _update_actor_baselines(actor_results)
-    result['silence_anomalies'] = _detect_silence_anomalies(actor_results, baselines)
+    if corpus_health.get('status') == 'degraded':
+        # Do not roll the actor baselines on a thin corpus either: it would teach
+        # the baseline that al-Shabaab "normally" says almost nothing.
+        result['silence_anomalies'] = []
+        result['silence_suppressed'] = corpus_health.get('note')
+        print("[Somalia Rhetoric] Silence reads suppressed -- corpus degraded")
+    else:
+        baselines = _update_actor_baselines(actor_results)
+        result['silence_anomalies'] = _detect_silence_anomalies(actor_results, baselines)
 
     # ── Tempo emission (corpus-health denominator) ──
     if TEMPO_EMIT_AVAILABLE and _tempo_emit:

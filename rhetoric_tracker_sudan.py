@@ -1756,6 +1756,24 @@ def run_sudan_rhetoric_scan(days=3):
 
     actor_results, theatre_summary = classify_articles(articles)
 
+    # ── v1.2.0 (Nov 2 2026): CO-OCCURRENCE MATCHING (africa_signal_matcher) ──
+    # The exact-phrase triggers above almost never fire on real headlines
+    # ('jnim attack' vs "JNIM fighters attack..."). The live Nov 2 read had a
+    # healthy corpus and every vector at 0. The matcher reads actor + event in
+    # the same headline (EN/FR/AR), needs 2+ outlets for L3+, and only ever RAISES
+    # a vector -- the exact phrases still count. Missing module = old behaviour.
+    cooc_report = None
+    try:
+        from africa_signal_matcher import apply_cooccurrence
+        cooc_report = apply_cooccurrence('sudan', articles, actor_results, theatre_summary, ACTOR_KEYWORDS)
+        print("[Sudan Rhetoric] Co-occurrence: " + ", ".join(
+            "%s %s->%s" % (v, d['before'], d['after'])
+            for v, d in cooc_report['vectors'].items() if d['after'] != d['before']) or "no change")
+    except ImportError:
+        print("[Sudan Rhetoric] africa_signal_matcher not installed -- exact phrases only")
+    except Exception as e:
+        print("[Sudan Rhetoric] Co-occurrence error: %s" % str(e)[:120])
+
     # ── TRAJECTORY (Jul 25 2026) ──────────────────────────────────────
     # Sudan carries THREE hubs and is the platform's clearest EXPANDING case:
     # the Port Sudan agreement is what a hub gaining ground looks like, which
@@ -1887,6 +1905,7 @@ def run_sudan_rhetoric_scan(days=3):
         # value returned by _write_crosstheater_signal -- same inputs, idempotent.
         'compound_convergence': compound_preview,
         'actors': actor_results,
+        'cooccurrence': cooc_report,
         'conditional_threats': theatre_summary.get('conditional_threats', [])[:8],
         'crosstheater_coordination': [],
         'disclaimer': 'This composite is a CONVERGENCE indicator, NOT a probability of action.',

@@ -1,6 +1,8 @@
 """
 Mali Rhetoric & Pressure Tracker — Asifah Analytics
 version: 1.1.0 — Oct 5, 2026  |  Africa backend (asifah-africa-backend.onrender.com)
+  (v1.2.0 Nov 2 2026: co-occurrence matching via africa_signal_matcher -- the
+   exact-phrase triggers read a healthy 332-article corpus as all-zero.)
   (v1.0.0 Jul 25 2026; v1.1.0 unions the trajectory + red-line event vocabulary
    into matched_phrases, which three event-gated red lines were starving on)
 
@@ -1410,6 +1412,24 @@ def run_mali_rhetoric_scan(days=3):
         return payload
 
     actor_results, ts = classify_articles(articles)
+
+    # ── v1.2.0 (Nov 2 2026): CO-OCCURRENCE MATCHING (africa_signal_matcher) ──
+    # The exact-phrase triggers above almost never fire on real headlines
+    # ('jnim attack' vs "JNIM fighters attack..."). The live Nov 2 read had a
+    # healthy corpus and every vector at 0. The matcher reads actor + event in
+    # the same headline (EN/FR/AR), needs 2+ outlets for L3+, and only ever RAISES
+    # a vector -- the exact phrases still count. Missing module = old behaviour.
+    cooc_report = None
+    try:
+        from africa_signal_matcher import apply_cooccurrence
+        cooc_report = apply_cooccurrence('mali', articles, actor_results, ts, ACTOR_KEYWORDS)
+        print("[Mali Rhetoric] Co-occurrence: " + ", ".join(
+            "%s %s->%s" % (v, d['before'], d['after'])
+            for v, d in cooc_report['vectors'].items() if d['after'] != d['before']) or "no change")
+    except ImportError:
+        print("[Mali Rhetoric] africa_signal_matcher not installed -- exact phrases only")
+    except Exception as e:
+        print("[Mali Rhetoric] Co-occurrence error: %s" % str(e)[:120])
     trajectory = _read_trajectory(articles)
 
     # ── v1.1.0: make `matched_phrases` mean "what this scan matched" ──
@@ -1466,6 +1486,7 @@ def run_mali_rhetoric_scan(days=3):
         'compound_layers': {'humanitarian': hum, 'commodity': com,
                             'russia_hub_parity': hub},
         'actors': actor_results,
+        'cooccurrence': cooc_report,
         'conditional_threats': ts.get('conditional_threats', [])[:8],
         'disclaimer': 'This composite is a CONVERGENCE indicator, NOT a probability of action.',
     }
@@ -1617,7 +1638,7 @@ def register_mali_rhetoric_endpoints(app):
         hum, com = _read_compound_layers()
         cached = _redis_get(RHETORIC_CACHE_KEY) or {}
         return jsonify({
-            'module': 'rhetoric_tracker_mali v1.0.0',
+            'module': 'rhetoric_tracker_mali v1.2.0',
             'redis_url_set': bool(UPSTASH_REDIS_URL),
             'gdelt_available': GDELT_AVAILABLE,
             'telegram_available': TELEGRAM_AVAILABLE,
