@@ -246,7 +246,8 @@ AFRICA_BACKEND_VERSION = '1.5.0'
 ASIFAH_USER_AGENT = (f"AsifahAnalytics-AF/{AFRICA_BACKEND_VERSION} "
                      f"(OSINT monitoring tool; +https://asifahanalytics.com)")
 
-# ── v1.5.0 (Nov 1 2026) flights: live Flight Watch replaces the curated May list.
+# ── v1.5.0 (Nov 1 2026) flights: live Flight Watch replaces the curated May list;
+#    Africa Actor Matrix registered (/api/africa/actor-matrix).
 # ── v1.4.0 (Nov 1 2026) public ?force gate ─────────────────────────────
 # ?force=true on a public endpoint ran a live scan for anyone on the internet.
 # Now: one forced rescan per endpoint path per 15 minutes (Upstash SET NX EX).
@@ -2283,6 +2284,12 @@ if AFRICA_BLUF_AVAILABLE:
         print('[Africa] ✅ Africa regional BLUF endpoints registered')
     except Exception as e:
         print(f'[Africa] ⚠️ Africa BLUF registration failed: {e}')
+    # Africa Actor Matrix (Nov 1 2026) -- reads the same trackers as the BLUF; scans nothing.
+    try:
+        from africa_actor_matrix import register_africa_actor_matrix
+        register_africa_actor_matrix(app)
+    except Exception as e:
+        print(f'[Africa] ⚠️ Africa Actor Matrix registration failed: {e}')
 
 if NIGERIA_STABILITY_AVAILABLE:
     try:
