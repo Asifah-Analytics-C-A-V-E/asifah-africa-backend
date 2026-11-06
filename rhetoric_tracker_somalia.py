@@ -1606,6 +1606,11 @@ def run_somalia_rhetoric_scan(days=3):
             print(f"[Somalia Rhetoric] Tempo emit failed (non-fatal): {str(_e)[:100]}")
 
     # ── Interpreter (so_what, red_lines, historical, top_signals) ──
+    # Nov 6 2026: event-named red lines read the headlines themselves (not
+    # only the vector level). Handed over here, removed again before caching.
+    result['_red_line_corpus'] = [{'title': a.get('title', ''), 'description': a.get('description', ''),
+                                   'source': a.get('source', ''), 'published': a.get('published', '')}
+                                  for a in articles]
     if _INTERPRETER_AVAILABLE and _somalia_interpret_signals:
         try:
             result['interpretation'] = _somalia_interpret_signals(result)
@@ -1622,6 +1627,7 @@ def run_somalia_rhetoric_scan(days=3):
             result['top_signals'] = []
     else:
         result['top_signals'] = []
+    result.pop('_red_line_corpus', None)          # Nov 6 2026: never cached / served
 
     # ── Save cache + last-known-good ──
     # v1.0.1 (Jul 23 2026): report the write outcome. Scans were returning data

@@ -1,7 +1,19 @@
 """
 somalia_signal_interpreter.py
 Asifah Analytics -- Africa Backend Module
-v1.0.0 -- July 20, 2026
+v1.1.0 -- Nov 6, 2026 (v1.0.0 July 20, 2026)
+
+v1.1.0 -- A RED LINE NAMED FOR AN EVENT NEEDS THAT EVENT IN THE REPORTING
+  Before: "Mogadishu Penetration / Siege" was BREACHED whenever the al-Shabaab
+  vector reached L4, and "AUSSOM Collapse / Abrupt Withdrawal" whenever the
+  AUSSOM vector did. On Nov 6 2026 both fired while the reporting described an
+  ADVANCE toward Mogadishu and a GRADUAL, announced Ugandan drawdown -- and
+  together they set the GPI's global level to L5.
+  Now both are event-gated: BREACHED needs the named event (al-Shabaab inside /
+  storming / besieging Mogadishu; an abrupt, total or unplanned AUSSOM exit) in
+  headlines from 2+ distinct news outlets within 72h. Social posts (Telegram,
+  Bluesky, Reddit) never count. A high vector without the event reads
+  APPROACHING, and the trigger text says what WAS reported.
 
 Signal interpretation engine for the Somalia Rhetoric & Pressure Tracker.
 
@@ -27,6 +39,7 @@ the inference.
 Author: RCGG / Asifah Analytics
 """
 
+import re
 from datetime import datetime, timezone
 
 SOMALIA_FLAG = '\U0001F1F8\U0001F1F4'  # 🇸🇴
@@ -175,9 +188,68 @@ HISTORICAL_PATTERNS = [
 # ============================================================
 # RED LINE SCORING
 # ============================================================
+# ── v1.1.0: event gates for red lines that name an event ──
+_SOCIAL = ('telegram', 'bluesky', 'r/', 'reddit')
+_EVENT_GATES = {
+    'mogadishu_penetration': {
+        'need_all': [r'mogadishu|muqdisho'],
+        'need_any': [r'storm(ed|s|ing)?|overr(an|un|unning)|captur(ed|es|ing)|seiz(ed|es|ing)|'
+                     r'besieg(ed|es|ing)|siege|encircl(ed|es|ing)|inside the capital|enter(ed|s)? the capital|'
+                     r'complex attack|fall of mogadishu|falls? to al.?shabaab'],
+        'exclude': [r'driven out|pushed back|repel(led|s)?|repuls(ed|es)|foil(ed|s)|thwart(ed|s)|'
+                    r'anniversary|years? ago|in 20(0|1)\d'],
+        'seen':   'al-Shabaab pressure is at L{lvl}, but no report of fighters inside, storming or '
+                  'besieging Mogadishu from 2+ outlets in 72h',
+    },
+    'aussom_collapse': {
+        'need_all': [r'aussom|african union|au (mission|troops|force|peacekeep)|peacekeep|ugand|burundi|ethiopia|kenya|egypt'],
+        'need_any': [r'collaps(e|ed|es|ing)|abrupt(ly)?|pull(s|ed)? out all|total withdrawal|'
+                     r'withdraw(s|n)? all|halt(s|ed)? operations|suspend(s|ed)? operations|'
+                     r'mission (ends|ended|terminated)|unplanned withdrawal|disband'],
+        'exclude': [r'gradual|phased|planned|drawdown schedule|in line with|as scheduled'],
+        'seen':   'AUSSOM pressure is at L{lvl}, but the withdrawal reported is phased or partial, '
+                  'not an abrupt or total exit (no 2-outlet report in 72h)',
+    },
+}
+
+
+def _event_hits(rl_id, corpus):
+    """Distinct outlets in the last 72h whose headline carries the named event."""
+    g = _EVENT_GATES.get(rl_id)
+    if not g or not corpus:
+        return [], []
+    now = datetime.now(timezone.utc)
+    outlets, examples = set(), []
+    for a in corpus:
+        src = (a.get('source') or '').strip()
+        if not src or any(x in src.lower() for x in _SOCIAL):
+            continue
+        try:
+            pub = datetime.fromisoformat(str(a.get('published')).replace('Z', '+00:00'))
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=timezone.utc)
+            if (now - pub).total_seconds() > 72 * 3600:
+                continue
+        except Exception:
+            continue                        # undated: cannot place it in the window
+        t = ((a.get('title') or '') + ' ' + (a.get('description') or '')).lower()
+        if not all(re.search(x, t) for x in g['need_all']):
+            continue
+        if not any(re.search(x, t) for x in g['need_any']):
+            continue
+        if any(re.search(x, t) for x in g['exclude']):
+            continue
+        key = src.lower()
+        if key not in outlets:
+            outlets.add(key)
+            examples.append('%s (%s)' % ((a.get('title') or '')[:110], src))
+    return sorted(outlets), examples
+
+
 def _score_red_lines(scan_data):
     """Evaluate each Somalia red line against current vector levels."""
     vectors = scan_data.get('vector_levels', {})
+    corpus = scan_data.get('_red_line_corpus') or []
     convergence = scan_data.get('wheel_convergence', {}) or {}
     triggered = []
 
@@ -192,6 +264,20 @@ def _score_red_lines(scan_data):
             continue
 
         rl_max = max((vectors.get(v, 0) for v in rl.get('vectors', [])), default=0)
+        if rl['id'] in _EVENT_GATES:                       # v1.1.0
+            outs, ex = _event_hits(rl['id'], corpus)
+            if rl_max >= 4 and len(outs) >= 2:
+                triggered.append({**_rl_public(rl), 'status': 'BREACHED', 'outlets': outs,
+                                  'trigger': ('Reported by %d outlets in 72h -- e.g. %s'
+                                              % (len(outs), ex[0]))[:240]})
+            elif rl_max >= 3 or outs:
+                why = _EVENT_GATES[rl['id']]['seen'].format(lvl=rl_max)
+                if outs:
+                    why = 'one outlet reports it (%s); a second is needed' % ex[0][:120]
+                triggered.append({**_rl_public(rl), 'status': 'APPROACHING', 'trigger': why[:240]})
+            else:
+                triggered.append({**_rl_public(rl), 'status': 'QUIET', 'trigger': ''})
+            continue
         if rl_max >= 4:
             status = 'BREACHED'
         elif rl_max == 3:
@@ -448,7 +534,8 @@ def build_top_signals(result):
                 'icon': rl.get('icon', '\U0001F6A8'),
                 'color': '#dc2626',
                 'short_text': f'{SOMALIA_FLAG} SOMALIA: {rl.get("label", "Red line")[:58]}',
-                'long_text': f'SOMALIA red line breached — {rl.get("label", "")}: {rl.get("detail", "")[:130]}',
+                'long_text': (f'SOMALIA red line breached — {rl.get("label", "")}: {rl.get("detail", "")[:130]}'
+                              + (f' Evidence: {rl.get("trigger")}' if rl.get('trigger') else ''))[:420],
             })
 
     # ── CATEGORY 3: al-SHABAAB SILENCE (mode='actor' marquee) ──
@@ -487,10 +574,12 @@ def build_top_signals(result):
             'priority': 10,
             'category': 'bab_el_mandeb_coupling',
             'theatre': 'somalia',
-            'level': vectors.get('maritime', 0),
+            # v1.1.0: piracy is a SIDE vector -- the tracker caps side vectors at L4
+            # for the theatre level; the signal must not carry L5 past that cap.
+            'level': min(vectors.get('maritime', 0), 4),
             'icon': '\U0001F6A2',
             'color': '#dc2626',
-            'short_text': f'{SOMALIA_FLAG} SOMALIA: Gulf of Aden / piracy L{vectors.get("maritime",0)}',
+            'short_text': f'{SOMALIA_FLAG} SOMALIA: Gulf of Aden / piracy L{min(vectors.get("maritime",0), 4)}',
             'long_text': ('SOMALIA: Piracy resurgence / Gulf of Aden tempo couples to the Yemen '
                           'Bab-el-Mandeb vector — the dual-chokepoint supply-risk read.'),
         })
