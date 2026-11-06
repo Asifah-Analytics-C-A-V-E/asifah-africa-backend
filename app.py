@@ -242,10 +242,18 @@ RENDER_DEPLOY_TAG  = 'asifa-africa-backend'
 # July. A version that disagrees with itself cannot answer "which build is
 # live?", which is the only question it exists to answer.
 # Both now derive from this line. Bump it here and every surface follows.
-AFRICA_BACKEND_VERSION = '1.5.0'
+AFRICA_BACKEND_VERSION = '1.5.1'
 ASIFAH_USER_AGENT = (f"AsifahAnalytics-AF/{AFRICA_BACKEND_VERSION} "
                      f"(OSINT monitoring tool; +https://asifahanalytics.com)")
 
+# ── v1.5.1 (Nov 6 2026) card scores, same contract as the ME backend 3.9.0:
+#    * stored scores live 36h in Upstash (was 12h -- the SAME length as the
+#      refresh cycle, so every score expired before its rescan finished);
+#    * a page load never runs a scan. A card with no stored score gets an
+#      honest "awaiting first scan" placeholder and ONE background scan
+#      (in-flight guard: 20 visitors no longer start 20 scans);
+#    * /api/africa/dashboard returns every card in one call;
+#    * /api/africa/cache-status lists every card's age and last result.
 # ── v1.5.0 (Nov 1 2026) flights: live Flight Watch replaces the curated May list;
 #    Africa Actor Matrix registered (/api/africa/actor-matrix).
 # ── v1.4.0 (Nov 1 2026) public ?force gate ─────────────────────────────
@@ -355,7 +363,9 @@ def cache_get(key):
 
 def cache_set(key, value):
     """Write to both Redis and file cache (for resilience)."""
-    _redis_set(key, value, ttl_seconds=CACHE_TTL_HOURS * 3600)
+    # v1.5.1: keep 3 cycles (36h). Freshness is judged by cached_at, not by
+    # expiry, so a late or failed rescan leaves the last read on the card.
+    _redis_set(key, value, ttl_seconds=CACHE_TTL_HOURS * 3600 * 3)
     _file_set(key, value)
 
 
@@ -1793,12 +1803,41 @@ def scan_country(country_id, days=7):
     return result
 
 
+_SCAN_IN_FLIGHT = set()
+_SCAN_IN_FLIGHT_LOCK = threading.Lock()
+_SCAN_LAST = {}   # country -> {'at', 'ok', 'note'} (this instance)
+
+
 def _background_scan_country(country_id, days=7):
-    """Run a country scan in a background thread."""
+    """Run a country scan in a background thread (one at a time per country)."""
+    with _SCAN_IN_FLIGHT_LOCK:
+        if country_id in _SCAN_IN_FLIGHT:
+            return
+        _SCAN_IN_FLIGHT.add(country_id)
     try:
-        scan_country(country_id, days=days)
+        r = scan_country(country_id, days=days)
+        _SCAN_LAST[country_id] = {'at': datetime.now(timezone.utc).isoformat(),
+                                  'ok': bool(r), 'note': '' if r else 'scan returned nothing'}
     except Exception as e:
+        _SCAN_LAST[country_id] = {'at': datetime.now(timezone.utc).isoformat(),
+                                  'ok': False, 'note': f'{type(e).__name__}: {str(e)[:160]}'}
         print(f'[Africa Background] {country_id} error: {str(e)[:200]}')
+    finally:
+        with _SCAN_IN_FLIGHT_LOCK:
+            _SCAN_IN_FLIGHT.discard(country_id)
+
+
+def _awaiting_placeholder(country):
+    """No stored score yet: say so. Never a made-up number."""
+    return {
+        'country': country,
+        'conflict_probability': None,
+        'alert_level': None,
+        'awaiting_scan': True,
+        'cached_at': None,
+        'cache_status': 'awaiting_first_scan',
+        'message': 'No stored scan yet -- the background scan has been queued.',
+    }
 
 
 def _run_all_countries_background(days=7):
@@ -1807,10 +1846,7 @@ def _run_all_countries_background(days=7):
         try:
             print('[Africa Background] Starting full-region refresh cycle...')
             for country_id in COUNTRY_CONFIG.keys():
-                try:
-                    scan_country(country_id, days=days)
-                except Exception as e:
-                    print(f'[Africa Background] {country_id} scan failed: {str(e)[:200]}')
+                _background_scan_country(country_id, days=days)   # v1.5.1: guarded + recorded
                 time.sleep(2)  # politeness between countries
             print('[Africa Background] Full-region refresh complete; sleeping...')
         except Exception as e:
@@ -1922,7 +1958,11 @@ def api_africa_threat(country):
             ).start()
             return jsonify(cached)
 
-    # No cache OR force=true — synchronous scan
+        # v1.5.1: no stored score and not forced -> never scan on a page load.
+        threading.Thread(target=_background_scan_country, args=(country,), daemon=True).start()
+        return jsonify(_awaiting_placeholder(country))
+
+    # force=true (Scan OSINT button) -- synchronous scan
     # Honor optional ?days=N query param (default 7, clamped 1-30)
     try:
         days = int(request.args.get('days', 7))
@@ -2016,6 +2056,48 @@ _COUNTRY_DISPLAY_NAMES = {
     'tanzania':          'Tanzania',
     'uganda':            'Uganda',
 }
+
+@app.route('/api/africa/dashboard', methods=['GET'])
+def api_africa_dashboard():
+    """v1.5.1 -- every card's stored score in ONE call. Never scans; a card
+    with nothing stored gets the awaiting placeholder (and one queued scan)."""
+    out = {}
+    for cid in COUNTRY_CONFIG.keys():
+        cached = cache_get(f'africa_country:{cid}')
+        if cached:
+            cached['cache_status'] = 'fresh' if is_cache_fresh(cached) else 'stale'
+            if cached['cache_status'] == 'stale':
+                threading.Thread(target=_background_scan_country, args=(cid,), daemon=True).start()
+            out[cid] = cached
+        else:
+            threading.Thread(target=_background_scan_country, args=(cid,), daemon=True).start()
+            out[cid] = _awaiting_placeholder(cid)
+    return jsonify({'success': True, 'version': AFRICA_BACKEND_VERSION,
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'countries': out})
+
+
+@app.route('/api/africa/cache-status', methods=['GET'])
+def api_africa_cache_status():
+    """v1.5.1 -- every card: stored? how old? last background result (this instance)."""
+    now = datetime.now(timezone.utc)
+    rows = {}
+    for cid in COUNTRY_CONFIG.keys():
+        cached = cache_get(f'africa_country:{cid}')
+        row = {'cached': bool(cached), 'refresh_every_h': CACHE_TTL_HOURS,
+               'scan_running': cid in _SCAN_IN_FLIGHT,
+               'last_background_try': _SCAN_LAST.get(cid)}
+        if cached:
+            try:
+                age = (now - datetime.fromisoformat(cached.get('cached_at'))).total_seconds() / 3600
+                row['age_hours'] = round(age, 1)
+            except Exception:
+                row['age_hours'] = 'unknown'
+            row['probability'] = cached.get('conflict_probability')
+        rows[cid] = row
+    return jsonify({'success': True, 'version': AFRICA_BACKEND_VERSION,
+                    'timestamp': now.isoformat(), 'targets': rows})
+
 
 @app.route('/api/africa/countries', methods=['GET'])
 def api_africa_countries():
