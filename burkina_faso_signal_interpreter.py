@@ -1,5 +1,6 @@
 """
 burkina_faso_signal_interpreter.py -- Asifah Analytics Africa Backend
+v1.0.1 -- 8 November 2026 (long_text trimmed at a sentence, not mid-word)
 v1.0.0 -- 11 October 2026
 
 Analyst layer for rhetoric_tracker_burkina_faso (Tier-2 spoke node).
@@ -133,6 +134,19 @@ DEESCALATION_PATTERNS = [
 # ════════════════════════════════════════════════════════════
 # HELPERS
 # ════════════════════════════════════════════════════════════
+def _trim_sentences(text, limit):
+    """Nov 8 2026: cut at the last full sentence that fits, never mid-word.
+    The old [:900] slice ended the Africa page's read on 'refusal is NOT low captu'."""
+    text = ' '.join(str(text or '').split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = max(cut.rfind('. '), cut.rfind('! '), cut.rfind('? '))
+    if end >= limit * 0.5:
+        return cut[:end + 1]
+    return cut.rsplit(' ', 1)[0].rstrip(',;:-') + '\u2026'
+
+
 def _rank(level):
     try:
         return LEVEL_ORDER.index(level)
@@ -282,10 +296,10 @@ def build_commercial_axis_top_signal(axis):
         'color': axis.get('color', '#f59e0b'),
         'short_text': ('%s BURKINA FASO: commercial axis %s -- %s'
                        % (axis.get('flag', ''), state.upper(), verb)),
-        'long_text': (axis.get('reading', '') + ' '
+        'long_text': _trim_sentences((axis.get('reading', '') + ' '
                       + (axis.get('both_hot_note') + ' ' if axis.get('both_hot') else '')
                       + axis.get('channel_asymmetry', '') + ' '
-                      + axis.get('disclaimer', ''))[:900],
+                      + axis.get('disclaimer', '')), 900),   # Nov 8 2026: whole sentences, never mid-word
     }
 
 
