@@ -89,7 +89,7 @@ except ImportError:
 # ONE version string, read by the payload, the debug route and every log line.
 # Three hand-maintained copies is how this file spent weeks reporting v1.0.0
 # in /debug while the payload said v1.0.1.
-MODULE_VERSION = '1.2.0'
+MODULE_VERSION = '1.2.1'   # Nov 15 2026: standing-war vocabulary (Sudan)
 
 UPSTASH_REDIS_URL   = (os.environ.get('UPSTASH_REDIS_URL')
                        or os.environ.get('UPSTASH_REDIS_REST_URL') or '')
@@ -336,6 +336,48 @@ except ImportError:
         return 'L%s' % level
     def _ts_named(name, level, category=None, pressure_type=None):
         return '%s (L%s)' % (name, level)
+
+
+# ── STANDING WARS (v1.2.1 Nov 15 2026) ───────────────────────────────
+# The kinetic ladder words assume peace is the baseline: L4 = "armed
+# incident". In a country already at full-scale war, that is false modesty --
+# "SUDAN -- armed incident (L4)" reads as one skirmish, in the largest war on
+# the continent. For these theatres the ladder measures intensity WITHIN a war,
+# so the words say so. The LEVELS are unchanged; only the words.
+STANDING_WARS = {
+    'sudan': 'SAF-RSF war since April 2023',
+}
+STANDING_WAR_STATE = {
+    0: 'war continuing: no reporting reached the scanners (unread, not calm)',
+    1: 'war continuing: background coverage only',
+    2: 'war continuing: routine clashes',
+    3: 'war continuing: massing and escalation language',
+    4: 'war continuing: confirmed strikes and sieges',
+    5: 'war escalating: a city falling or mass atrocity',
+    6: 'red line breached',
+}
+
+
+def _war_lvl(level):
+    try:
+        return max(0, min(6, int(level or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _t_level(theatre, level):
+    """_ts_level, but war-aware for STANDING_WARS."""
+    if theatre in STANDING_WARS:
+        lv = _war_lvl(level)
+        return '%s (L%d)' % (STANDING_WAR_STATE[lv], lv)
+    return _ts_level(level)
+
+
+def _t_named(theatre, name, level):
+    if theatre in STANDING_WARS:
+        lv = _war_lvl(level)
+        return '%s -- %s (L%d)' % (name, STANDING_WAR_STATE[lv], lv)
+    return _ts_named(name, level)
 
 
 
@@ -891,7 +933,7 @@ def _build_bluf_prose(posture, trackers, missing):
         score   = data.get('score', 0)
 
         parts.append('%s carries the Africa read at %s, composite %s/100.'
-                     % (display, _ts_level(lvl), score))
+                     % (display, _t_level(theatre, lvl), score))
 
         # Hottest vectors -- names the drivers rather than asserting a cause
         vl = data.get('vector_levels', {}) or {}
@@ -963,11 +1005,11 @@ def _build_bluf_prose(posture, trackers, missing):
     lead = ranked[0]
     lead_display = THEATRE_DISPLAY.get(lead[0], lead[0].upper())
     parts.append('%s leads at %s, composite %s/100.'
-                 % (lead_display, _ts_level(lead[1]['levels']['threat']),
+                 % (lead_display, _t_level(lead[0], lead[1]['levels']['threat']),
                     lead[1].get('score', 0)))
 
     if len(ranked) > 1:
-        others = '; '.join(_ts_named(THEATRE_DISPLAY.get(t, t.upper()),
+        others = '; '.join(_t_named(t, THEATRE_DISPLAY.get(t, t.upper()),
                                     d['levels']['threat'])
                            for t, d in ranked[1:5])
         parts.append('Also live: %s.' % others)
@@ -1392,7 +1434,13 @@ def _build_fresh_impl(force=False):
             threat_lvl = lvls.get('threat', 0)
             theatre_summary[t] = {
                 'level':           threat_lvl,
-                'label':           ESCALATION_LABELS.get(threat_lvl, 'Unknown'),
+                # v1.2.1 -- a standing war's chip says WAR, not the peacetime
+                # ladder word ('Coercion' for Sudan was the wrong noun).
+                'label':           (('War ongoing' if threat_lvl >= 1 else 'War ongoing · unread')
+                                    if t in STANDING_WARS
+                                    else ESCALATION_LABELS.get(threat_lvl, 'Unknown')),
+                'state_phrase':    _t_level(t, threat_lvl),
+                'standing_war':    STANDING_WARS.get(t),
                 'color':           ESCALATION_COLORS.get(threat_lvl, '#6b7280'),
                 'score':           data.get('score', 0),
                 'flag':            data.get('flag', THEATRE_FLAGS.get(t, '')),

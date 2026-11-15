@@ -1,6 +1,6 @@
 """
 Sudan Rhetoric & Pressure Tracker — Asifah Analytics
-version: 1.0.0 — July 24, 2026  |  Africa backend (asifah-africa-backend.onrender.com)
+version: 1.1.0 — Nov 15, 2026 (spoke:russia:sudan + spoke:uae:sudan) | 1.0.0 — July 24, 2026  |  Africa backend (asifah-africa-backend.onrender.com)
 
 Sudan is a HUB, not a peripheral country tracker: four wheels plug into Khartoum
 (Russia state-level + Wagner/Africa Corps, UAE, Egypt/KSA, Iran/Turkey), and
@@ -1619,6 +1619,59 @@ def _write_crosstheater_signal(result, theatre_summary, humanitarian_read,
         return {'compound_risk_active': False, 'russia_contradiction_active': False, 'notes': []}
 
 
+# ── Hub spokes (v1.1.0 Nov 15 2026) ──────────────────────────────────
+# Before this, the Russia and UAE wheels found Sudan only through the
+# canonical fingerprint, whose 'level' is the WAR's level. So Sudan sat on
+# the Russia wheel at L4 because SAF and RSF were fighting -- not because of
+# anything Moscow did -- with a blank one-line read. Each wheel now gets its
+# OWN relationship's level and a sentence that says what it is.
+SPOKE_TTL = 30 * 3600
+_SUDAN_SPOKES = {
+    'russia': {
+        'vector': 'russia_plug', 'node_class': 'expeditionary_client',
+        'name': 'Port Sudan base deal / Africa Corps supply',
+        'quiet': 'No Port Sudan base or Africa Corps reporting this cycle.',
+        'why': 'A Russian naval foothold on the Red Sea -- negotiated with the SAF state while Russia-aligned Haftar supplies the RSF.',
+    },
+    'uae': {
+        'vector': 'uae_axis', 'node_class': 'war_economy_client',
+        'name': 'UAE support to the RSF (gold, arms routes)',
+        'quiet': 'No UAE-RSF attribution reporting this cycle.',
+        'why': 'The RSF\'s principal outside patron, by the reporting -- the war-economy line that keeps the RSF supplied.',
+    },
+}
+
+
+def _write_hub_spokes(theatre_summary, result):
+    _tj = (result.get('trajectories') or {})
+    for hub, cfg in _SUDAN_SPOKES.items():
+        try:
+            v = cfg['vector']
+            lvl = int(theatre_summary.get(v + '_max', 0) or 0)
+            sigs = theatre_summary.get(v + '_signals', []) or []
+            titles = [x.get('title', '') for x in sigs if x.get('title')]
+            if lvl >= 2 and titles:
+                top = 'Sudan: %s at L%d -- "%s"' % (cfg['name'], lvl, titles[0][:110])
+            elif lvl >= 1:
+                top = 'Sudan: %s -- background mentions only (L%d).' % (cfg['name'], lvl)
+            else:
+                top = 'Sudan: ' + cfg['quiet'] + ' Unread, not calm.'
+            tj = _tj.get(hub, {}) or {}
+            _redis_set('spoke:%s:sudan' % hub, {
+                'ts': datetime.now(timezone.utc).isoformat(),
+                'hub': hub, 'country': 'sudan', 'level': lvl,
+                'node_class': cfg['node_class'], 'relationship': cfg['node_class'],
+                'top_signal': top[:180], 'why': cfg['why'], 'items': len(titles),
+                'war_level': result.get('theatre_escalation_level', 0),
+                'trajectory': {'direction': tj.get('direction', 'holding'), 'level': lvl,
+                               'confidence': tj.get('confidence', 'reported' if titles else 'no_evidence')},
+                'source': 'rhetoric_tracker_sudan v1.1.0',
+            }, ttl=SPOKE_TTL)
+            print(f"[Sudan Rhetoric] spoke:{hub}:sudan written (L{lvl})")
+        except Exception as e:
+            print(f"[Sudan Rhetoric] spoke:{hub}:sudan write error: {str(e)[:120]}")
+
+
 def _detect_crosstheater_coordination(sudan_plug_level=0):
     """Read sibling hub fingerprints and flag how the Sudan reads sit alongside
     active hub postures elsewhere. Surface-only; the GPI synthesizes globally.
@@ -2010,6 +2063,7 @@ def run_sudan_rhetoric_scan(days=3):
         result, theatre_summary, humanitarian_read, commodity_read,
         russia_hub_read, compound_preview)
     result['compound_convergence'] = compound
+    _write_hub_spokes(theatre_summary, result)
     result['crosstheater_coordination'] = _detect_crosstheater_coordination(max_russia_plug)
 
     print(f"[Sudan Rhetoric] \u2705 Scan complete — score {rhetoric_score}, "
