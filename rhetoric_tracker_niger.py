@@ -91,7 +91,7 @@ except ImportError:
     FEEDPARSER_AVAILABLE = False
     print('[NE Rhetoric] feedparser unavailable -- RSS disabled')
 
-MODULE_VERSION = '1.0.0'
+MODULE_VERSION = '1.0.1'   # Nov 21 2026: GPI-safe signals (explicit axis, numeric levels, standing)
 
 UPSTASH_REDIS_URL = (os.environ.get('UPSTASH_REDIS_URL')
                      or os.environ.get('UPSTASH_REDIS_REST_URL'))
@@ -523,11 +523,11 @@ SPOKES = {
                'why': 'Africa Corps at Air Base 101; helped repel the airport attack and end the August 2026 mutiny.'},
     'china':  {'actor': 'oil_china', 'node_class': 'resource_client',
                'why': 'CNPC oil and the Benin pipeline; under a 45-day revenue ultimatum from 16 Oct 2026.'},
-    'us':     {'actor': 'us_axis', 'node_class': 'reengaging',
+    'us':     {'actor': 'us_axis', 'node_class': 're_engaging',
                'why': 'US DFC up to $414M for Dasa uranium (Sep 2026) and ~$23M of equipment (May 2026).'},
     'turkey': {'actor': 'turkey_axis', 'node_class': 'arms_client',
                'why': 'Turkish armed drones and arms on credit; uranium interest.'},
-    'iran':   {'actor': 'iran_axis', 'node_class': 'watch',
+    'iran':   {'actor': 'iran_axis', 'node_class': 'reported_interest',
                'why': 'Reported uranium interest, unconfirmed (rumour tier).'},
 }
 
@@ -1171,7 +1171,10 @@ def _resource_axis(actor_summaries, tripwires):
     oil = actor_summaries.get('oil_china') or {}
     tw = {t.get('id') for t in tripwires}
     refusal = _rank(ur.get('level', 'low')) + (2 if 'china_oil_rupture' in tw else 0)
-    capture = _rank(oil.get('level', 'low')) + (1 if 'uranium_sale' in tw else 0)
+    # An oil level RAISED by the ultimatum red line is Niamey pulling control
+    # back -- refusal, already counted above -- not foreign capture.
+    oil_cap = 0 if oil.get('level_basis') == 'red_line:china_oil_rupture' else _rank(oil.get('level', 'low'))
+    capture = oil_cap + (1 if 'uranium_sale' in tw else 0)
     us = actor_summaries.get('us_axis') or {}
     if us.get('level') in ('elevated', 'high', 'surge'):
         capture += 1   # foreign financing of a mine is positioning, whoever it is
@@ -1201,32 +1204,64 @@ def _resource_axis(actor_summaries, tripwires):
 # ════════════════════════════════════════════════════════════
 # PROSE -- estimative voice, builtin (no Claude call)
 # ════════════════════════════════════════════════════════════
+# GPI-SAFE SIGNALS (v1.0.1). The regional BLUF passes these straight to the
+# GPI, which (a) coerces the WORD 'surge' to L5 and (b) guesses the axis from
+# the category. So every signal carries:
+#   * a NUMERIC platform level -- red lines map surge->4, high->3,
+#     elevated->2, because L5 comes only from a front ladder;
+#   * an explicit pressure_type (kinetic / economic / diplomatic / governance);
+#   * standing=True on the standing fronts (Tillaberi, Diffa), so a standing
+#     insurgency is not headlined as new.
+TRIPWIRE_SIG_LEVEL = {'surge': 4, 'high': 3, 'elevated': 2}
+TRIPWIRE_AXIS = {
+    'capital_attacked': 'kinetic', 'regime_change_event': 'governance', 'mutiny': 'governance',
+    'mass_casualty_event': 'kinetic', 'pipeline_sabotage': 'economic', 'china_oil_rupture': 'economic',
+    'foreign_force_deployment': 'diplomatic', 'uranium_sale': 'economic',
+    'diplomatic_rupture': 'diplomatic', 'aes_fracture': 'diplomatic', 'benin_border_reopens': 'economic',
+}
+ACTOR_AXIS = {
+    'junta_tiani': 'governance', 'mutiny_plot': 'governance',
+    'russia_axis_ne': 'diplomatic', 'algeria_axis': 'diplomatic', 'us_axis': 'diplomatic',
+    'turkey_axis': 'diplomatic', 'iran_axis': 'diplomatic', 'france_rupture': 'diplomatic',
+    'aes_ecowas': 'diplomatic', 'uranium_leverage': 'economic', 'oil_china': 'economic',
+    'benin_border': 'economic',
+}
+SIG_COLOR = {0: '#6b7280', 1: '#3b82f6', 2: '#f59e0b', 3: '#f97316', 4: '#ef4444', 5: '#7c3aed'}
+
+
 def _prose(theatre_level, fronts, actor_summaries, vector_levels, tripwires, resource_axis):
     sigs = []
     for t in tripwires[:4]:
         tid = t.get('id', 'tripwire')
-        sigs.append({'level': t.get('severity', 'high'), 'type': 'tripwire', 'priority': 10,
-                     'category': 'tripwire', 'theatre': 'niger',
-                     'short_text': '\U0001F1F3\U0001F1EA Red line: %s' % tid.replace('_', ' '),
+        lv = TRIPWIRE_SIG_LEVEL.get(t.get('severity'), 2)
+        sigs.append({'level': lv, 'severity': t.get('severity'), 'type': 'tripwire', 'priority': 10,
+                     'category': 'tripwire', 'pressure_type': TRIPWIRE_AXIS.get(tid, 'kinetic'),
+                     'theatre': 'niger', 'icon': '🚨', 'color': SIG_COLOR[lv],
+                     'short_text': '🇳🇪 NIGER red line: %s' % tid.replace('_', ' '),
                      'long_text': (TRIPWIRES.get(tid) or {}).get('note', '')})
     for fid, f in fronts.items():
         if f['level'] >= 3:
-            sigs.append({'level': 'high' if f['level'] >= 4 else 'elevated', 'type': 'front',
-                         'priority': 9, 'category': 'kinetic_front', 'theatre': 'niger',
-                         'short_text': '\U0001F4A5 %s at L%d%s' % (f['name'], f['level'],
-                                                                 ' (standing)' if f.get('standing') else ''),
-                         'long_text': ('Worst report: "%s" (%s). %d outlets at this rung.'
+            sigs.append({'level': f['level'], 'type': 'front', 'priority': 9,
+                         'category': 'kinetic_front', 'pressure_type': 'kinetic',
+                         'standing': bool(f.get('standing')), 'front': fid,
+                         'theatre': 'niger', 'icon': '💥', 'color': SIG_COLOR.get(f['level'], '#6b7280'),
+                         'short_text': '🇳🇪 NIGER %s at L%d%s' % (
+                             f['name'], f['level'], ' (standing insurgency)' if f.get('standing') else ''),
+                         'long_text': ('Worst report: "%s" (%s). %d outlets at this rung.%s'
                                        % ((f.get('worst') or {}).get('title', '')[:140],
-                                          (f.get('worst') or {}).get('source', ''), f['outlets_at_level']))})
+                                          (f.get('worst') or {}).get('source', ''), f['outlets_at_level'],
+                                          ' A standing insurgency: fighting here is the condition, not news.'
+                                          if f.get('standing') else ''))})
     for aid in ('russia_axis_ne', 'algeria_axis', 'us_axis', 'oil_china', 'uranium_leverage',
                 'turkey_axis', 'france_rupture', 'benin_border', 'mutiny_plot'):
         s = actor_summaries.get(aid) or {}
         if s.get('level') in ('elevated', 'high', 'surge'):
             ta = (s.get('top_articles') or [{}])[0]
-            sigs.append({'level': s['level'], 'type': 'actor_signal', 'priority': 7,
-                         'category': 'actor_signal', 'theatre': 'niger',
-                         'short_text': '%s %s at %s' % (ACTORS[aid]['flag'], ACTORS[aid]['name'],
-                                                        s['level'].upper()),
+            lv = LEVEL_TO_PLATFORM.get(s['level'], 2)
+            sigs.append({'level': lv, 'type': 'actor_signal', 'priority': 7,
+                         'category': 'actor_signal', 'pressure_type': ACTOR_AXIS.get(aid, 'diplomatic'),
+                         'theatre': 'niger', 'icon': ACTORS[aid]['icon'], 'color': SIG_COLOR.get(lv, '#6b7280'),
+                         'short_text': '🇳🇪 NIGER %s at %s' % (ACTORS[aid]['name'], s['level'].upper()),
                          'long_text': '"%s" (%s)' % (ta.get('title', '')[:160], ta.get('source', ''))})
     sigs.sort(key=lambda x: -x.get('priority', 0))
 
@@ -1309,8 +1344,14 @@ def score_articles(articles):
                 gate_reasons['nigeria'] += 1
 
     by_actor = {k: [] for k in ACTORS}
+    _named_fronts = {'front_tillaberi', 'front_diffa', 'front_north'}
     for a in gated:
-        for aid, hits in _classify_article(a):
+        cls = _classify_article(a)
+        # An attack that names its front is not "unplaced" (v1.0.1): counting
+        # it twice would put a second, non-standing L4 into the GPI.
+        if any(aid in _named_fronts for aid, _ in cls):
+            cls = [(aid, h) for aid, h in cls if aid != 'attacks_unplaced']
+        for aid, hits in cls:
             c = dict(a)
             c['_hits'] = hits
             by_actor[aid].append(c)

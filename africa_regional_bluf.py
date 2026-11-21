@@ -89,7 +89,7 @@ except ImportError:
 # ONE version string, read by the payload, the debug route and every log line.
 # Three hand-maintained copies is how this file spent weeks reporting v1.0.0
 # in /debug while the payload said v1.0.1.
-MODULE_VERSION = '1.2.1'   # Nov 15 2026: standing-war vocabulary (Sudan)
+MODULE_VERSION = '1.2.2'   # Nov 21 2026: Niger tracker live + standing-insurgency vocabulary. 1.2.1 Nov 15 2026: standing-war vocabulary (Sudan)
 
 UPSTASH_REDIS_URL   = (os.environ.get('UPSTASH_REDIS_URL')
                        or os.environ.get('UPSTASH_REDIS_REST_URL') or '')
@@ -112,7 +112,9 @@ TRACKER_KEYS = {
                                             # commercial axis, not gaining/losing. It
                                             # lands in trajectory_unread, which is
                                             # correct and should stay that way.
-    # 'niger':        'rhetoric:niger:latest',
+    'niger':        'rhetoric:niger:latest',  # v1.0 Nov 21 2026 -- multi-wheel spoke; fronts on a
+                                            # kinetic ladder, L5 only from a front. Standing
+                                            # insurgencies flagged per front (see STANDING_INSURGENCIES).
     # 'car':          'rhetoric:car:latest',
     # 'drc':          'rhetoric:drc:latest',
     # 'ethiopia':     'rhetoric:ethiopia:latest',
@@ -358,6 +360,40 @@ STANDING_WAR_STATE = {
 }
 
 
+# ── STANDING INSURGENCIES (v1.2.2 Nov 21 2026) ──────────────────────
+# Niger is not at war the way Sudan is, but two of its fronts (Tillaberi,
+# Diffa) are insurgencies that have run for a decade. When THOSE fronts set the
+# country's level, the words should say "insurgency continuing", not a
+# peacetime "Coercion". When something else sets the level (the CNPC
+# ultimatum, a mutiny), the normal ladder words stay. The tracker tells us
+# which: standing_fronts + fronts[k].level + kinetic_level.
+STANDING_INSURGENCIES = {
+    'niger': 'jihadist insurgencies in Tillabéri (west) and Diffa / Lake Chad (east), running since 2015',
+}
+STANDING_INSURGENCY_STATE = {
+    0: 'insurgency continuing: no reporting reached the scanners (unread, not calm)',
+    1: 'insurgency continuing: background coverage only',
+    2: 'insurgency continuing: threats and claims',
+    3: 'insurgency continuing: attacks on the standing fronts',
+    4: 'insurgency continuing: mass-casualty attacks on the standing fronts',
+    5: 'insurgency escalating: a town or base taken, or the capital attacked',
+    6: 'red line breached',
+}
+_STANDING_NOW = {}   # theatre -> True when a standing front sets this cycle's level
+
+
+def _standing_driven(theatre, raw_data, threat):
+    """True when the theatre's level comes from a standing front."""
+    if theatre not in STANDING_INSURGENCIES or not isinstance(raw_data, dict):
+        return False
+    fronts = raw_data.get('fronts') or {}
+    standing = [k for k in (raw_data.get('standing_fronts') or []) if isinstance(fronts.get(k), dict)]
+    if not standing:
+        return False
+    top_standing = max(_safe_int(fronts[k].get('level')) for k in standing)
+    return top_standing >= 3 and top_standing >= _safe_int(threat)
+
+
 def _war_lvl(level):
     try:
         return max(0, min(6, int(level or 0)))
@@ -366,7 +402,11 @@ def _war_lvl(level):
 
 
 def _t_level(theatre, level):
-    """_ts_level, but war-aware for STANDING_WARS."""
+    """_ts_level, but war-aware for STANDING_WARS (and STANDING_INSURGENCIES
+    when a standing front sets the level this cycle)."""
+    if _STANDING_NOW.get(theatre):
+        lv = _war_lvl(level)
+        return '%s (L%d)' % (STANDING_INSURGENCY_STATE[lv], lv)
     if theatre in STANDING_WARS:
         lv = _war_lvl(level)
         return '%s (L%d)' % (STANDING_WAR_STATE[lv], lv)
@@ -374,6 +414,9 @@ def _t_level(theatre, level):
 
 
 def _t_named(theatre, name, level):
+    if _STANDING_NOW.get(theatre):
+        lv = _war_lvl(level)
+        return '%s -- %s (L%d)' % (name, STANDING_INSURGENCY_STATE[lv], lv)
     if theatre in STANDING_WARS:
         lv = _war_lvl(level)
         return '%s -- %s (L%d)' % (name, STANDING_WAR_STATE[lv], lv)
@@ -637,6 +680,8 @@ def _normalize_tracker_data(theatre, raw_data):
             peak_vector = 0
         if peak_vector > threat:
             threat = peak_vector
+
+    _STANDING_NOW[theatre] = _standing_driven(theatre, raw_data, threat)
 
     # ---- SCORE ----
     score = _safe_int(raw_data.get('theatre_score',
@@ -1438,9 +1483,11 @@ def _build_fresh_impl(force=False):
                 # ladder word ('Coercion' for Sudan was the wrong noun).
                 'label':           (('War ongoing' if threat_lvl >= 1 else 'War ongoing · unread')
                                     if t in STANDING_WARS
+                                    else 'Insurgency ongoing' if _STANDING_NOW.get(t)
                                     else ESCALATION_LABELS.get(threat_lvl, 'Unknown')),
                 'state_phrase':    _t_level(t, threat_lvl),
                 'standing_war':    STANDING_WARS.get(t),
+                'standing_insurgency': (STANDING_INSURGENCIES.get(t) if _STANDING_NOW.get(t) else None),
                 'color':           ESCALATION_COLORS.get(threat_lvl, '#6b7280'),
                 'score':           data.get('score', 0),
                 'flag':            data.get('flag', THEATRE_FLAGS.get(t, '')),
