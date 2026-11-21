@@ -212,6 +212,23 @@ except ImportError as e:
     BURKINA_RHETORIC_AVAILABLE = False
     print(f"[Africa] ⚠️ rhetoric_tracker_burkina_faso not yet available: {e}")
 
+# Niger (Nov 21 2026) -- stability sensors first; the rhetoric tracker is next.
+try:
+    from niger_humanitarian import register_niger_humanitarian_endpoints
+    NIGER_HUMANITARIAN_AVAILABLE = True
+    print("[Africa] ✅ niger_humanitarian loaded")
+except ImportError as e:
+    NIGER_HUMANITARIAN_AVAILABLE = False
+    print(f"[Africa] ⚠️ niger_humanitarian not yet available: {e}")
+
+try:
+    from niger_financial import register_niger_financial_endpoints
+    NIGER_FINANCIAL_AVAILABLE = True
+    print("[Africa] ✅ niger_financial loaded")
+except ImportError as e:
+    NIGER_FINANCIAL_AVAILABLE = False
+    print(f"[Africa] ⚠️ niger_financial not yet available: {e}")
+
 
 # ============================================================
 # FLASK APP
@@ -2400,6 +2417,20 @@ if BURKINA_RHETORIC_AVAILABLE:
         print('[Africa] ✅ Burkina Faso rhetoric endpoints registered (12h scheduler ON)')
     except Exception as e:
         print(f'[Africa] ⚠️ Burkina Faso rhetoric registration failed: {e}')
+
+if NIGER_HUMANITARIAN_AVAILABLE:
+    try:
+        register_niger_humanitarian_endpoints(app)
+        print('[Africa] ✅ Niger humanitarian endpoints registered')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Niger humanitarian registration failed: {e}')
+
+if NIGER_FINANCIAL_AVAILABLE:
+    try:
+        register_niger_financial_endpoints(app, start_background=True)
+        print('[Africa] ✅ Niger financial endpoints registered (12h scheduler ON)')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Niger financial registration failed: {e}')
 
 
 # ============================================================
