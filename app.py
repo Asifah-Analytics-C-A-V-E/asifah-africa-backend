@@ -229,6 +229,14 @@ except ImportError as e:
     NIGER_FINANCIAL_AVAILABLE = False
     print(f"[Africa] ⚠️ niger_financial not yet available: {e}")
 
+try:
+    from rhetoric_tracker_niger import register_niger_rhetoric_routes
+    NIGER_RHETORIC_AVAILABLE = True
+    print("[Africa] ✅ rhetoric_tracker_niger loaded")
+except ImportError as e:
+    NIGER_RHETORIC_AVAILABLE = False
+    print(f"[Africa] ⚠️ rhetoric_tracker_niger not yet available: {e}")
+
 
 # ============================================================
 # FLASK APP
@@ -2432,6 +2440,13 @@ if NIGER_FINANCIAL_AVAILABLE:
     except Exception as e:
         print(f'[Africa] ⚠️ Niger financial registration failed: {e}')
 
+if NIGER_RHETORIC_AVAILABLE:
+    try:
+        register_niger_rhetoric_routes(app, start_background=True)
+        print('[Africa] ✅ Niger rhetoric endpoints registered (12h scheduler ON)')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Niger rhetoric registration failed: {e}')
+
 
 # ============================================================
 # BOOT
@@ -2454,6 +2469,8 @@ print(f'  BLUF:      {"✅ regional BLUF loaded" if AFRICA_BLUF_AVAILABLE else "
 _bf_mods = [BURKINA_HUMANITARIAN_AVAILABLE, BURKINA_FINANCIAL_AVAILABLE,
             BURKINA_RHETORIC_AVAILABLE]
 print(f'  Burkina:   {"✅ humanitarian + financial + rhetoric" if all(_bf_mods) else f"⏳ {sum(_bf_mods)}/3 loaded"}')
+_ne_mods = [NIGER_HUMANITARIAN_AVAILABLE, NIGER_FINANCIAL_AVAILABLE, NIGER_RHETORIC_AVAILABLE]
+print(f'  Niger:     {"✅ humanitarian + financial + rhetoric" if all(_ne_mods) else f"⏳ {sum(_ne_mods)}/3 loaded"}')
 print('=' * 60)
 
 
