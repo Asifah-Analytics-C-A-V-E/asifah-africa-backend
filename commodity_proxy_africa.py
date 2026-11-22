@@ -46,6 +46,7 @@ AFRICA_COMMODITY_TARGETS = [
     'sudan', 'drc', 'uganda', 'rwanda', 'south_sudan',
     'kenya', 'tanzania', 'ethiopia', 'somalia', 'nigeria',
     'mali', 'niger', 'burkina_faso', 'south_africa',
+    'car',          # Nov 22 2026: the CAR page's commodity card was only working via its ME-direct fallback
 ]
 
 # ── Upstash Redis (shared with main app.py) ──

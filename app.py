@@ -237,6 +237,31 @@ except ImportError as e:
     NIGER_RHETORIC_AVAILABLE = False
     print(f"[Africa] ⚠️ rhetoric_tracker_niger not yet available: {e}")
 
+# Central African Republic (Nov 22 2026) -- stability sensors, then the rhetoric tracker.
+try:
+    from car_humanitarian import register_car_humanitarian_endpoints
+    CAR_HUMANITARIAN_AVAILABLE = True
+    print("[Africa] ✅ car_humanitarian loaded")
+except ImportError as e:
+    CAR_HUMANITARIAN_AVAILABLE = False
+    print(f"[Africa] ⚠️ car_humanitarian not yet available: {e}")
+
+try:
+    from car_financial import register_car_financial_endpoints
+    CAR_FINANCIAL_AVAILABLE = True
+    print("[Africa] ✅ car_financial loaded")
+except ImportError as e:
+    CAR_FINANCIAL_AVAILABLE = False
+    print(f"[Africa] ⚠️ car_financial not yet available: {e}")
+
+try:
+    from rhetoric_tracker_car import register_car_rhetoric_routes
+    CAR_RHETORIC_AVAILABLE = True
+    print("[Africa] ✅ rhetoric_tracker_car loaded")
+except ImportError as e:
+    CAR_RHETORIC_AVAILABLE = False
+    print(f"[Africa] ⚠️ rhetoric_tracker_car not yet available: {e}")
+
 
 # ============================================================
 # FLASK APP
@@ -2447,6 +2472,25 @@ if NIGER_RHETORIC_AVAILABLE:
     except Exception as e:
         print(f'[Africa] ⚠️ Niger rhetoric registration failed: {e}')
 
+if CAR_HUMANITARIAN_AVAILABLE:
+    try:
+        register_car_humanitarian_endpoints(app)
+    except Exception as e:
+        print(f'[Africa] ⚠️ CAR humanitarian registration failed: {e}')
+
+if CAR_FINANCIAL_AVAILABLE:
+    try:
+        register_car_financial_endpoints(app, start_background=True)
+    except Exception as e:
+        print(f'[Africa] ⚠️ CAR financial registration failed: {e}')
+
+if CAR_RHETORIC_AVAILABLE:
+    try:
+        register_car_rhetoric_routes(app, start_background=True)
+        print('[Africa] ✅ CAR rhetoric endpoints registered (12h scheduler ON)')
+    except Exception as e:
+        print(f'[Africa] ⚠️ CAR rhetoric registration failed: {e}')
+
 
 # ============================================================
 # BOOT
@@ -2471,6 +2515,8 @@ _bf_mods = [BURKINA_HUMANITARIAN_AVAILABLE, BURKINA_FINANCIAL_AVAILABLE,
 print(f'  Burkina:   {"✅ humanitarian + financial + rhetoric" if all(_bf_mods) else f"⏳ {sum(_bf_mods)}/3 loaded"}')
 _ne_mods = [NIGER_HUMANITARIAN_AVAILABLE, NIGER_FINANCIAL_AVAILABLE, NIGER_RHETORIC_AVAILABLE]
 print(f'  Niger:     {"✅ humanitarian + financial + rhetoric" if all(_ne_mods) else f"⏳ {sum(_ne_mods)}/3 loaded"}')
+_car_mods = [CAR_HUMANITARIAN_AVAILABLE, CAR_FINANCIAL_AVAILABLE, CAR_RHETORIC_AVAILABLE]
+print(f'  CAR:       {"✅ humanitarian + financial + rhetoric" if all(_car_mods) else f"⏳ {sum(_car_mods)}/3 loaded"}')
 print('=' * 60)
 
 
