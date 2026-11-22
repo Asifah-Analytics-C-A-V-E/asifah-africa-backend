@@ -91,7 +91,7 @@ except ImportError:
     FEEDPARSER_AVAILABLE = False
     print('[NE Rhetoric] feedparser unavailable -- RSS disabled')
 
-MODULE_VERSION = '1.0.1'   # Nov 21 2026: GPI-safe signals (explicit axis, numeric levels, standing)
+MODULE_VERSION = '1.0.2'   # Nov 22 2026: Google News outlet fix (real outlet from the title suffix). 1.0.1 Nov 21 2026: GPI-safe signals (explicit axis, numeric levels, standing)
 
 UPSTASH_REDIS_URL = (os.environ.get('UPSTASH_REDIS_URL')
                      or os.environ.get('UPSTASH_REDIS_REST_URL'))
@@ -845,12 +845,21 @@ def fetch_rss(feed_id, cfg, max_items=30):
     try:
         feed = feedparser.parse(cfg['url'])
         for e in feed.entries[:max_items]:
+            title, source = e.get('title', ''), cfg['name']
+            # v1.0.2 OUTLET FIX (same as CAR v1.0.0): Google News carries many
+            # outlets under one feed name. Read the real outlet from the
+            # " - Outlet" title suffix, so the two-outlet rule counts newspapers,
+            # not feeds -- before this, four Google News stories from four
+            # papers counted as ONE outlet ("GoogleNews-EN").
+            if 'news.google.com' in cfg.get('url', '') and ' - ' in title:
+                title, source = title.rsplit(' - ', 1)
+                source = source.strip() or cfg['name']
             out.append({
-                'title': e.get('title', ''),
+                'title': title,
                 'description': e.get('summary', '') or e.get('description', ''),
                 'url': e.get('link', ''),
                 'published': e.get('published', ''),
-                'source': cfg['name'], 'feed_id': feed_id, 'feed_type': 'rss',
+                'source': source, 'feed_id': feed_id, 'feed_type': 'rss',
                 'language': cfg.get('language', 'en'),
                 'feed_weight': cfg.get('weight', 1.0),
             })

@@ -89,7 +89,7 @@ except ImportError:
 # ONE version string, read by the payload, the debug route and every log line.
 # Three hand-maintained copies is how this file spent weeks reporting v1.0.0
 # in /debug while the payload said v1.0.1.
-MODULE_VERSION = '1.2.2'   # Nov 21 2026: Niger tracker live + standing-insurgency vocabulary. 1.2.1 Nov 15 2026: standing-war vocabulary (Sudan)
+MODULE_VERSION = '1.2.3'   # Nov 22 2026: CAR tracker live + standing-insurgency entry. 1.2.2 Nov 21 2026: Niger tracker live + standing-insurgency vocabulary. 1.2.1 Nov 15 2026: standing-war vocabulary (Sudan)
 
 UPSTASH_REDIS_URL   = (os.environ.get('UPSTASH_REDIS_URL')
                        or os.environ.get('UPSTASH_REDIS_REST_URL') or '')
@@ -115,7 +115,10 @@ TRACKER_KEYS = {
     'niger':        'rhetoric:niger:latest',  # v1.0 Nov 21 2026 -- multi-wheel spoke; fronts on a
                                             # kinetic ladder, L5 only from a front. Standing
                                             # insurgencies flagged per front (see STANDING_INSURGENCIES).
-    # 'car':          'rhetoric:car:latest',
+    'car':          'rhetoric:car:latest',   # v1.0 Nov 22 2026 -- multi-wheel spoke (Russia, Rwanda, UAE,
+                                            # China, US); three standing fronts on a kinetic ladder,
+                                            # L5 only from a front or an attack on Bangui. Guard axis
+                                            # (who guards Touadera) rides inside the Russia spoke.
     # 'drc':          'rhetoric:drc:latest',
     # 'ethiopia':     'rhetoric:ethiopia:latest',
     # 'nigeria':      'rhetoric:nigeria:latest',
@@ -369,6 +372,10 @@ STANDING_WAR_STATE = {
 # which: standing_fronts + fronts[k].level + kinetic_level.
 STANDING_INSURGENCIES = {
     'niger': 'jihadist insurgencies in Tillabéri (west) and Diffa / Lake Chad (east), running since 2015',
+    # v1.2.3 Nov 22 2026 -- CAR: armed groups on three fronts (northwest, southeast,
+    # northeast), running since 2013. Same contract as Niger: the words change only
+    # when a standing front sets the level this cycle.
+    'car':   'armed-group conflict on three fronts (northwest, southeast, northeast), running since 2013',
 }
 STANDING_INSURGENCY_STATE = {
     0: 'insurgency continuing: no reporting reached the scanners (unread, not calm)',
@@ -1335,19 +1342,21 @@ def _build_signals(posture, trackers):
 # ============================================================
 # CONVERGENCE PANEL  (spoke & wheel -- Africa is SPOKES ONLY)
 # ============================================================
-# Africa hosts NO hub. Every wheel read here is OUTBOUND: African countries
-# feed hubs that live on other backends -- Turkey (Europe), Russia (Europe),
-# and in time China (Asia) and a light Israel touch via Somaliland.
+# Until Nov 22 2026 Africa hosted NO hub: every wheel read here was OUTBOUND,
+# African countries feeding hubs that live on other backends -- Turkey and
+# Russia (Europe), China (Asia), the UAE and Israel (ME), the US (WHA).
 #
-# RESIDENT_HUBS is therefore empty, and the panel renders as pure emanating.
-# The moment a hub does become resident here, adding its slug to this list is
-# the entire change.
+# v1.2.3 Nov 22 2026 -- RWANDA is the first resident hub: a mini wheel (CAR,
+# Mozambique as security partners; DRC as proxy_backing, the UN-experts claim
+# Kigali denies). Only CAR writes a Rwanda spoke today, so the wheel reads one
+# lit spoke and two NOT REPORTING -- roadmap, said aloud, never 'quiet'.
+# As promised above: adding the slug to this list was the entire change.
 #
 # NOTHING is a hardcoded country list: local_countries derives from
 # TRACKER_KEYS, so the Sahel bundle joins the emanating scan the moment those
 # trackers register. Wagner spokes across Mali/Niger/Burkina Faso and the
 # future BRI spokes need no edit here and none in the frontend.
-RESIDENT_HUBS = []
+RESIDENT_HUBS = ['rwanda']
 
 
 def _build_convergence_panel():
