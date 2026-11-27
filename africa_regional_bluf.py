@@ -89,7 +89,7 @@ except ImportError:
 # ONE version string, read by the payload, the debug route and every log line.
 # Three hand-maintained copies is how this file spent weeks reporting v1.0.0
 # in /debug while the payload said v1.0.1.
-MODULE_VERSION = '1.2.5'   # Nov 27 2026 (b): DRC tracker live + Uganda resident hub. 1.2.4 Nov 27 2026: no doubled country prefix when a tracker leads with its flag. 1.2.3 Nov 22 2026: CAR tracker live + standing-insurgency entry. 1.2.2 Nov 21 2026: Niger tracker live + standing-insurgency vocabulary. 1.2.1 Nov 15 2026: standing-war vocabulary (Sudan)
+MODULE_VERSION = '1.2.6'   # Nov 27 2026 (c): rebuild early when a new tracker is configured. 1.2.5 Nov 27 2026 (b): DRC tracker live + Uganda resident hub. 1.2.4 Nov 27 2026: no doubled country prefix when a tracker leads with its flag. 1.2.3 Nov 22 2026: CAR tracker live + standing-insurgency entry. 1.2.2 Nov 21 2026: Niger tracker live + standing-insurgency vocabulary. 1.2.1 Nov 15 2026: standing-war vocabulary (Sudan)
 
 UPSTASH_REDIS_URL   = (os.environ.get('UPSTASH_REDIS_URL')
                        or os.environ.get('UPSTASH_REDIS_REST_URL') or '')
@@ -1463,6 +1463,14 @@ def build_regional_bluf(force=False):
         due = cached.get('refresh_after_sec') or BLUF_CACHE_TTL
         cached['from_cache'] = True
         cached['age_minutes'] = round(age / 60) if age is not None else None
+        # v1.2.6 Nov 27 2026: a cache built before a NEW tracker was configured
+        # is stale by definition -- without this, a country added on deploy day
+        # stayed off the regional page for up to 14 hours (DRC, 27 Nov).
+        # Rebuild after a 10-minute grace, so the new tracker's first scan
+        # (5-6 minutes after boot) has landed before the BLUF reads it.
+        new_tracker = cached.get('trackers_total') != len(TRACKER_KEYS)
+        if new_tracker and age is not None and age >= 600:
+            due = 0
         if age is None or age >= due:
             _rebuild_in_background()
             cached['refreshing'] = True
