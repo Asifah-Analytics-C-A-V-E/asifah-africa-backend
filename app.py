@@ -287,6 +287,31 @@ except ImportError as e:
     DRC_RHETORIC_AVAILABLE = False
     print(f"[Africa] ⚠️ rhetoric_tracker_drc not yet available: {e}")
 
+# Rwanda (Nov 27 2026) -- stability sensors first; the hub tracker follows.
+try:
+    from rwanda_humanitarian import register_rwanda_humanitarian_endpoints
+    RWANDA_HUMANITARIAN_AVAILABLE = True
+    print("[Africa] ✅ rwanda_humanitarian loaded")
+except ImportError as e:
+    RWANDA_HUMANITARIAN_AVAILABLE = False
+    print(f"[Africa] ⚠️ rwanda_humanitarian not yet available: {e}")
+
+try:
+    from rwanda_financial import register_rwanda_financial_endpoints
+    RWANDA_FINANCIAL_AVAILABLE = True
+    print("[Africa] ✅ rwanda_financial loaded")
+except ImportError as e:
+    RWANDA_FINANCIAL_AVAILABLE = False
+    print(f"[Africa] ⚠️ rwanda_financial not yet available: {e}")
+
+try:
+    from rhetoric_tracker_rwanda import register_rwanda_rhetoric_routes
+    RWANDA_RHETORIC_AVAILABLE = True
+    print("[Africa] ✅ rhetoric_tracker_rwanda loaded")
+except ImportError as e:
+    RWANDA_RHETORIC_AVAILABLE = False
+    print(f"[Africa] ⚠️ rhetoric_tracker_rwanda not yet available: {e}")
+
 
 # ============================================================
 # FLASK APP
@@ -2542,6 +2567,25 @@ if DRC_RHETORIC_AVAILABLE:
     except Exception as e:
         print(f'[Africa] ⚠️ DRC rhetoric registration failed: {e}')
 
+if RWANDA_HUMANITARIAN_AVAILABLE:
+    try:
+        register_rwanda_humanitarian_endpoints(app)
+    except Exception as e:
+        print(f'[Africa] ⚠️ Rwanda humanitarian registration failed: {e}')
+
+if RWANDA_FINANCIAL_AVAILABLE:
+    try:
+        register_rwanda_financial_endpoints(app, start_background=True)
+    except Exception as e:
+        print(f'[Africa] ⚠️ Rwanda financial registration failed: {e}')
+
+if RWANDA_RHETORIC_AVAILABLE:
+    try:
+        register_rwanda_rhetoric_routes(app, start_background=True)
+        print('[Africa] ✅ Rwanda rhetoric endpoints registered (12h scheduler ON)')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Rwanda rhetoric registration failed: {e}')
+
 
 # ============================================================
 # BOOT
@@ -2570,6 +2614,8 @@ _car_mods = [CAR_HUMANITARIAN_AVAILABLE, CAR_FINANCIAL_AVAILABLE, CAR_RHETORIC_A
 print(f'  CAR:       {"✅ humanitarian + financial + rhetoric" if all(_car_mods) else f"⏳ {sum(_car_mods)}/3 loaded"}')
 _drc_mods = [DRC_HUMANITARIAN_AVAILABLE, DRC_FINANCIAL_AVAILABLE, DRC_RHETORIC_AVAILABLE]
 print(f'  DRC:       {"✅ humanitarian + financial + rhetoric" if all(_drc_mods) else f"⏳ {sum(_drc_mods)}/3 loaded"}')
+_rw_mods = [RWANDA_HUMANITARIAN_AVAILABLE, RWANDA_FINANCIAL_AVAILABLE, RWANDA_RHETORIC_AVAILABLE]
+print(f'  Rwanda:    {"✅ humanitarian + financial + rhetoric" if all(_rw_mods) else f"⏳ {sum(_rw_mods)}/3 loaded"}')
 print('=' * 60)
 
 
