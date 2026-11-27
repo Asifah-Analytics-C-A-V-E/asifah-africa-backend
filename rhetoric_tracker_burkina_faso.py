@@ -128,7 +128,8 @@ except ImportError:
     print('[BF Rhetoric] severity_canon not deployed on this backend '
           '-- local fallback table in use')
 
-MODULE_VERSION = '1.0.0'
+MODULE_VERSION = '1.0.1'   # Nov 27 2026: recency gate (old Google News / Brave stories no longer score) + Brave freshness=pw + Google News when:7d
+_RECENCY_STATE = {'last': None}   # last recency-gate stats, shown on the debug route
 
 # ════════════════════════════════════════════════════════════
 # CONFIG
@@ -660,15 +661,15 @@ TRIPWIRES = {
 RSS_FEEDS = {
     'gn_en': {
         'url': ('https://news.google.com/rss/search?q=%22Burkina+Faso%22+OR+Ouagadougou'
-                '+OR+Traore&hl=en-US&gl=US&ceid=US:en'),
+                '+OR+Traore+when:7d&hl=en-US&gl=US&ceid=US:en'),
         'name': 'GoogleNews-EN', 'weight': 0.85, 'language': 'en'},
     'gn_fr': {
         'url': ('https://news.google.com/rss/search?q=%22Burkina+Faso%22+OR+Ouagadougou'
-                '&hl=fr&gl=FR&ceid=FR:fr'),
+                '+when:7d&hl=fr&gl=FR&ceid=FR:fr'),
         'name': 'GoogleNews-FR', 'weight': 0.85, 'language': 'fr'},
     'gn_mining': {
         'url': ('https://news.google.com/rss/search?q=%22Burkina+Faso%22+(mine+OR+gold'
-                '+OR+SOPAMIB+OR+refinery)&hl=en-US&gl=US&ceid=US:en'),
+                '+OR+SOPAMIB+OR+refinery)+when:7d&hl=en-US&gl=US&ceid=US:en'),
         'name': 'GoogleNews-Mining', 'weight': 0.85, 'language': 'en'},
     'apa':      {'url': 'https://www.apanews.net/feed/', 'name': 'APA News',
                  'weight': 0.9, 'language': 'fr'},
@@ -965,7 +966,7 @@ def fetch_brave(gdelt_n=0, news_n=0):
     out = []
     for q in ['Burkina Faso Traore 2026', 'Burkina Faso JNIM', 'Burkina Faso gold refinery']:
         try:
-            r = requests.get(BRAVE_BASE_URL, params={'q': q, 'count': 20},
+            r = requests.get(BRAVE_BASE_URL, params={'q': q, 'count': 20, 'freshness': 'pw'},
                              headers={'Accept': 'application/json',
                                       'X-Subscription-Token': BRAVE_API_KEY},
                              timeout=10)
@@ -974,7 +975,7 @@ def fetch_brave(gdelt_n=0, news_n=0):
             for i in r.json().get('results', []):
                 out.append({
                     'title': i.get('title', ''), 'description': i.get('description', ''),
-                    'url': i.get('url', ''), 'published': i.get('age', ''),
+                    'url': i.get('url', ''), 'published': i.get('page_age') or i.get('age', ''),
                     'source': i.get('source') or 'Brave', 'feed_id': 'brave',
                     'feed_type': 'brave', 'language': 'en', 'feed_weight': 0.75,
                 })
@@ -1431,6 +1432,17 @@ def scan_burkina_faso_rhetoric(force=False, days=7):
         if u and u not in seen:
             seen.add(u)
             articles.append(a)
+
+    # RECENCY GATE (Nov 27 2026). Google News search and Brave ignore the
+    # 7-day window, so stale stories were scoring as this week's news. Drop
+    # anything older than the window BEFORE the country gate and the ladders.
+    try:
+        from recency_gate import filter_recent
+        articles, _recency = filter_recent(articles, days)
+    except Exception as _e:
+        _recency = {'error': 'recency gate failed open: %s' % str(_e)[:100]}
+    _RECENCY_STATE['last'] = _recency
+    print('[BF Rhetoric] recency gate: %s' % _recency)
     print('[BF Rhetoric] after dedup: %d' % len(articles))
 
     # ── COUNTRY GATE before any actor keyword ──
@@ -1650,7 +1662,7 @@ def scan_burkina_faso_rhetoric(force=False, days=7):
                       'This is the defence against scoring global commodity '
                       'chatter as country signal.'),
         'scan_time_seconds': round(time.time() - t0, 1),
-        'days_analyzed': days,
+        'days_analyzed': days, 'recency': _recency,
         'last_updated': datetime.now(timezone.utc).isoformat(),
         'cached': False,
     }
@@ -1802,6 +1814,7 @@ def register_burkina_faso_rhetoric_routes(app, start_background=True):
             'redis_wired': bool(UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN),
             'newsapi_configured': bool(NEWSAPI_KEY),
             'brave_configured': bool(BRAVE_API_KEY),
+            'recency_gate': _RECENCY_STATE['last'],
             'cache_present': cached is not None,
             'cache_fresh': is_cache_fresh(cached) if cached else False,
             'last_scan_started_at': (_last_scan_started_at.isoformat()

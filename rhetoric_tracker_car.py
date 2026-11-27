@@ -87,7 +87,8 @@ except ImportError:
     FEEDPARSER_AVAILABLE = False
     print('[CAR Rhetoric] feedparser unavailable -- RSS disabled')
 
-MODULE_VERSION = '1.0.0'
+MODULE_VERSION = '1.0.1'   # Nov 27 2026: recency gate (old Google News / Brave stories no longer score) + Brave freshness=pw + Google News when:7d
+_RECENCY_STATE = {'last': None}   # last recency-gate stats, shown on the debug route
 
 UPSTASH_REDIS_URL = (os.environ.get('UPSTASH_REDIS_URL')
                      or os.environ.get('UPSTASH_REDIS_REST_URL'))
@@ -580,18 +581,18 @@ TRIPWIRES = {
 # FEEDS -- EN + FR
 # ════════════════════════════════════════════════════════════
 RSS_FEEDS = {
-    'gn_en': {'url': ('https://news.google.com/rss/search?q=%22Central+African+Republic%22&hl=en-US&gl=US&ceid=US:en'),
+    'gn_en': {'url': ('https://news.google.com/rss/search?q=%22Central+African+Republic%22+when:7d&hl=en-US&gl=US&ceid=US:en'),
               'name': 'GoogleNews-EN', 'weight': 0.85, 'language': 'en', 'aggregator': True},
-    'gn_fr': {'url': ('https://news.google.com/rss/search?q=Centrafrique&hl=fr&gl=FR&ceid=FR:fr'),
+    'gn_fr': {'url': ('https://news.google.com/rss/search?q=Centrafrique+when:7d&hl=fr&gl=FR&ceid=FR:fr'),
               'name': 'GoogleNews-FR', 'weight': 0.85, 'language': 'fr', 'aggregator': True},
     'gn_russia': {'url': ('https://news.google.com/rss/search?q=Centrafrique+(Wagner+OR+%22Africa+Corps%22+OR+Russie)'
-                          '&hl=fr&gl=FR&ceid=FR:fr'),
+                          '+when:7d&hl=fr&gl=FR&ceid=FR:fr'),
                   'name': 'GoogleNews-Russia', 'weight': 0.85, 'language': 'fr', 'aggregator': True},
     'gn_fronts': {'url': ('https://news.google.com/rss/search?q=Centrafrique+(attaque+OR+Zemio+OR+Vakaga+OR+Ouham+OR+MINUSCA)'
-                          '&hl=fr&gl=FR&ceid=FR:fr'),
+                          '+when:7d&hl=fr&gl=FR&ceid=FR:fr'),
                   'name': 'GoogleNews-Fronts', 'weight': 0.85, 'language': 'fr', 'aggregator': True},
     'gn_resources': {'url': ('https://news.google.com/rss/search?q=%22Central+African+Republic%22+(gold+OR+diamonds+OR+Rwanda+OR+UAE)'
-                             '&hl=en-US&gl=US&ceid=US:en'),
+                             '+when:7d&hl=en-US&gl=US&ceid=US:en'),
                      'name': 'GoogleNews-Resources', 'weight': 0.85, 'language': 'en', 'aggregator': True},
     'rfi_af':   {'url': 'https://www.rfi.fr/fr/afrique/rss', 'name': 'RFI Afrique',
                  'weight': 0.95, 'language': 'fr'},
@@ -872,7 +873,7 @@ def fetch_brave(gdelt_n=0, news_n=0):
     out = []
     for q in BRAVE_QUERIES:
         try:
-            r = requests.get(BRAVE_BASE_URL, params={'q': q, 'count': 20},
+            r = requests.get(BRAVE_BASE_URL, params={'q': q, 'count': 20, 'freshness': 'pw'},
                              headers={'Accept': 'application/json',
                                       'X-Subscription-Token': BRAVE_API_KEY},
                              timeout=10)
@@ -881,7 +882,7 @@ def fetch_brave(gdelt_n=0, news_n=0):
             for i in r.json().get('results', []):
                 out.append({
                     'title': i.get('title', ''), 'description': i.get('description', ''),
-                    'url': i.get('url', ''), 'published': i.get('age', ''),
+                    'url': i.get('url', ''), 'published': i.get('page_age') or i.get('age', ''),
                     'source': i.get('source') or 'Brave', 'feed_id': 'brave',
                     'feed_type': 'brave', 'language': 'en', 'feed_weight': 0.75,
                 })
@@ -1393,6 +1394,17 @@ def scan_car_rhetoric(force=False, days=7):
             seen.add(u)
             articles.append(a)
 
+    # RECENCY GATE (Nov 27 2026). Google News search and Brave ignore the
+    # 7-day window, so stale stories were scoring as this week's news. Drop
+    # anything older than the window BEFORE the country gate and the ladders.
+    try:
+        from recency_gate import filter_recent
+        articles, _recency = filter_recent(articles, days)
+    except Exception as _e:
+        _recency = {'error': 'recency gate failed open: %s' % str(_e)[:100]}
+    _RECENCY_STATE['last'] = _recency
+    print('[CAR Rhetoric] recency gate: %s' % _recency)
+
     S = score_articles(articles)
     actor_summaries, tripwires, fronts = S['actor_summaries'], S['tripwires'], S['fronts']
     theatre_level, guard = S['theatre_level'], S['guard_axis']
@@ -1433,7 +1445,7 @@ def scan_car_rhetoric(force=False, days=7):
         'articles_rejected_by_gate': S['rejected'], 'gate_reasons': S['gate_reasons'],
         'gate_note': ('An article must name the Central African Republic or a CAR place, person or institution. '
                       '"Central Africa" (the region) and Bangui in the Philippines do not pass.'),
-        'scan_time_seconds': round(time.time() - t0, 1), 'days_analyzed': days,
+        'scan_time_seconds': round(time.time() - t0, 1), 'days_analyzed': days, 'recency': _recency,
         'last_updated': now, 'cached': False,
     }
     save_cache(result)
@@ -1520,6 +1532,7 @@ def register_car_rhetoric_routes(app, start_background=True):
             'actor_validation': ACTOR_VALIDATION, 'validation_as_of': VALIDATION_AS_OF,
             'rss_feeds': len(RSS_FEEDS), 'redis_wired': bool(UPSTASH_REDIS_URL and UPSTASH_REDIS_TOKEN),
             'newsapi_configured': bool(NEWSAPI_KEY), 'brave_configured': bool(BRAVE_API_KEY),
+            'recency_gate': _RECENCY_STATE['last'],
             'cache_present': cached is not None,
             'cache_fresh': is_cache_fresh(cached) if cached else False,
             'last_guard_state': (cached or {}).get('guard_axis', {}).get('state'),

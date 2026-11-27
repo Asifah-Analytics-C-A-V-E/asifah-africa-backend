@@ -89,7 +89,7 @@ except ImportError:
 # ONE version string, read by the payload, the debug route and every log line.
 # Three hand-maintained copies is how this file spent weeks reporting v1.0.0
 # in /debug while the payload said v1.0.1.
-MODULE_VERSION = '1.2.3'   # Nov 22 2026: CAR tracker live + standing-insurgency entry. 1.2.2 Nov 21 2026: Niger tracker live + standing-insurgency vocabulary. 1.2.1 Nov 15 2026: standing-war vocabulary (Sudan)
+MODULE_VERSION = '1.2.4'   # Nov 27 2026: no doubled country prefix when a tracker leads with its flag. 1.2.3 Nov 22 2026: CAR tracker live + standing-insurgency entry. 1.2.2 Nov 21 2026: Niger tracker live + standing-insurgency vocabulary. 1.2.1 Nov 15 2026: standing-war vocabulary (Sudan)
 
 UPSTASH_REDIS_URL   = (os.environ.get('UPSTASH_REDIS_URL')
                        or os.environ.get('UPSTASH_REDIS_REST_URL') or '')
@@ -1179,9 +1179,15 @@ def _build_signals(posture, trackers):
             # ("SO SOMALIA: ..."), so startswith('SOMALIA') was False and the
             # prefix was applied twice ("SO SOMALIA: SO SOMALIA: ..."). Test
             # whether the country is named anywhere in the text instead.
+            # v1.2.4 (Nov 27 2026): ALSO skip when the tracker already led with
+            # its flag. CAR's tracker writes "CF CAR red line: ..." -- 'CENTRAL
+            # AFRICAN REPUBLIC' is not in that text, so the old test doubled it
+            # ("CF CENTRAL AFRICAN REPUBLIC: CF CAR red line: ...").
             disp = THEATRE_DISPLAY.get(theatre, theatre.upper())
-            if disp.upper() not in s['short_text'].upper():
-                s['short_text'] = '%s %s: %s' % (flag, disp, s['short_text'])
+            st = s['short_text']
+            already = (disp.upper() in st.upper()) or (flag and st.lstrip().startswith(flag))
+            if not already:
+                s['short_text'] = '%s %s: %s' % (flag, disp, st)
             all_signals.append(s)
 
     # 2) Junction convergence -- Africa's marquee regional signal
