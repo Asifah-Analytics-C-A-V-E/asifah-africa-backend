@@ -91,8 +91,9 @@ except ImportError:
     FEEDPARSER_AVAILABLE = False
     print('[NE Rhetoric] feedparser unavailable -- RSS disabled')
 
-MODULE_VERSION = '1.0.3'   # Nov 27 2026: recency gate + Brave freshness=pw + Google News when:7d. 1.0.2 Nov 22 2026: Google News outlet fix (real outlet from the title suffix). 1.0.1 Nov 21 2026: GPI-safe signals (explicit axis, numeric levels, standing)
-_RECENCY_STATE = {'last': None}   # last recency-gate stats, shown on the debug route
+MODULE_VERSION = '1.0.4'   # Nov 27 2026 (b): outlet cap + URL-signed outlets shown as hostnames. 1.0.3 Nov 27 2026: recency gate + Brave freshness=pw + Google News when:7d. 1.0.2 Nov 22 2026: Google News outlet fix (real outlet from the title suffix). 1.0.1 Nov 21 2026: GPI-safe signals (explicit axis, numeric levels, standing)
+_RECENCY_STATE = {'last': None}
+OUTLET_CAP = 2   # max articles per outlet per actor that add to its score (Nov 27 2026)   # last recency-gate stats, shown on the debug route
 
 UPSTASH_REDIS_URL = (os.environ.get('UPSTASH_REDIS_URL')
                      or os.environ.get('UPSTASH_REDIS_REST_URL'))
@@ -855,6 +856,10 @@ def fetch_rss(feed_id, cfg, max_items=30):
             if 'news.google.com' in cfg.get('url', '') and ' - ' in title:
                 title, source = title.rsplit(' - ', 1)
                 source = source.strip() or cfg['name']
+                # v-next (Nov 27 2026): some outlets sign with a bare URL
+                # ("https://corbeaunews-centrafrique.org/"); show the hostname.
+                if source.startswith('http'):
+                    source = re.sub(r'^https?://(www\.)?', '', source).strip('/') or cfg['name']
             out.append({
                 'title': title,
                 'description': e.get('summary', '') or e.get('description', ''),
@@ -1087,13 +1092,22 @@ def _score_actor(articles):
     if not articles:
         return {'score': 0, 'article_count': 0, 'language_breakdown': {},
                 'sources': [], 'top_articles': [], 'tripwires': [], 'outlets': 0}
+    # OUTLET CAP (Nov 27 2026): one outlet counts for at most OUTLET_CAP
+    # articles per actor. Before this, one prolific site (nine Wagner pieces
+    # in a week from a single Bangui outlet) could push an actor to SURGE and
+    # carry a whole country to L4 on its own. Volume now has to come from
+    # several newsrooms, the same principle as the two-outlet rule for L3+.
+    per_outlet = {}
     score = 0.0
     langs, srcs = {}, {}
     tw_seen = set()
     for a in articles:
         w = a.get('feed_weight', 1.0)
         hits = a.get('_hits', 1)
-        score += w * min(1.0 + (hits - 1) * 0.15, 2.0)
+        _o = a.get('source', '?')
+        per_outlet[_o] = per_outlet.get(_o, 0) + 1
+        if per_outlet[_o] <= OUTLET_CAP:
+            score += w * min(1.0 + (hits - 1) * 0.15, 2.0)
         langs[a.get('language', 'en')] = langs.get(a.get('language', 'en'), 0) + 1
         srcs[a.get('source', '?')] = srcs.get(a.get('source', '?'), 0) + 1
         for tw_id, sev in _check_tripwires('%s %s' % (a.get('title', ''), a.get('description', ''))):

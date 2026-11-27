@@ -128,8 +128,9 @@ except ImportError:
     print('[BF Rhetoric] severity_canon not deployed on this backend '
           '-- local fallback table in use')
 
-MODULE_VERSION = '1.0.1'   # Nov 27 2026: recency gate (old Google News / Brave stories no longer score) + Brave freshness=pw + Google News when:7d
-_RECENCY_STATE = {'last': None}   # last recency-gate stats, shown on the debug route
+MODULE_VERSION = '1.0.2'   # Nov 27 2026 (b): Google News outlet fix (real outlet from the title suffix) + outlet cap. 1.0.1 Nov 27 2026: recency gate (old Google News / Brave stories no longer score) + Brave freshness=pw + Google News when:7d
+_RECENCY_STATE = {'last': None}
+OUTLET_CAP = 2   # max articles per outlet per actor that add to its score (Nov 27 2026)   # last recency-gate stats, shown on the debug route
 
 # ════════════════════════════════════════════════════════════
 # CONFIG
@@ -875,12 +876,20 @@ def fetch_rss(feed_id, cfg, max_items=30):
     try:
         feed = feedparser.parse(cfg['url'])
         for e in feed.entries[:max_items]:
+            title, source = e.get('title', ''), cfg['name']
+            # OUTLET FIX (Nov 27 2026, as CAR/Niger): Google News carries many
+            # outlets under one feed name; read the real one from the title suffix.
+            if 'news.google.com' in cfg.get('url', '') and ' - ' in title:
+                title, source = title.rsplit(' - ', 1)
+                source = source.strip() or cfg['name']
+                if source.startswith('http'):
+                    source = re.sub(r'^https?://(www\.)?', '', source).strip('/') or cfg['name']
             out.append({
-                'title': e.get('title', ''),
+                'title': title,
                 'description': e.get('summary', '') or e.get('description', ''),
                 'url': e.get('link', ''),
                 'published': e.get('published', ''),
-                'source': cfg['name'], 'feed_id': feed_id, 'feed_type': 'rss',
+                'source': source, 'feed_id': feed_id, 'feed_type': 'rss',
                 'language': cfg.get('language', 'en'),
                 'feed_weight': cfg.get('weight', 1.0),
             })
@@ -1282,13 +1291,22 @@ def _score_actor(articles, actor_id):
     if not articles:
         return {'score': 0, 'article_count': 0, 'language_breakdown': {},
                 'sources': [], 'top_articles': [], 'tripwires': []}
+    # OUTLET CAP (Nov 27 2026): one outlet counts for at most OUTLET_CAP
+    # articles per actor. Before this, one prolific site (nine Wagner pieces
+    # in a week from a single Bangui outlet) could push an actor to SURGE and
+    # carry a whole country to L4 on its own. Volume now has to come from
+    # several newsrooms, the same principle as the two-outlet rule for L3+.
+    per_outlet = {}
     score = 0.0
     langs, srcs = {}, {}
     tw_seen = set()
     for a in articles:
         w = a.get('feed_weight', 1.0)
         hits = a.get('_hits', 1)
-        score += w * min(1.0 + (hits - 1) * 0.15, 2.0)
+        _o = a.get('source', '?')
+        per_outlet[_o] = per_outlet.get(_o, 0) + 1
+        if per_outlet[_o] <= OUTLET_CAP:
+            score += w * min(1.0 + (hits - 1) * 0.15, 2.0)
         langs[a.get('language', 'en')] = langs.get(a.get('language', 'en'), 0) + 1
         srcs[a.get('source', '?')] = srcs.get(a.get('source', '?'), 0) + 1
         for tw_id, sev, axis in _check_tripwires(
