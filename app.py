@@ -312,6 +312,31 @@ except ImportError as e:
     RWANDA_RHETORIC_AVAILABLE = False
     print(f"[Africa] ⚠️ rhetoric_tracker_rwanda not yet available: {e}")
 
+# Mozambique (Nov 27 2026) -- stability sensors first; the Rwanda wheel's third spoke follows.
+try:
+    from mozambique_humanitarian import register_mozambique_humanitarian_endpoints
+    MOZAMBIQUE_HUMANITARIAN_AVAILABLE = True
+    print("[Africa] ✅ mozambique_humanitarian loaded")
+except ImportError as e:
+    MOZAMBIQUE_HUMANITARIAN_AVAILABLE = False
+    print(f"[Africa] ⚠️ mozambique_humanitarian not yet available: {e}")
+
+try:
+    from mozambique_financial import register_mozambique_financial_endpoints
+    MOZAMBIQUE_FINANCIAL_AVAILABLE = True
+    print("[Africa] ✅ mozambique_financial loaded")
+except ImportError as e:
+    MOZAMBIQUE_FINANCIAL_AVAILABLE = False
+    print(f"[Africa] ⚠️ mozambique_financial not yet available: {e}")
+
+try:
+    from rhetoric_tracker_mozambique import register_mozambique_rhetoric_routes
+    MOZAMBIQUE_RHETORIC_AVAILABLE = True
+    print("[Africa] ✅ rhetoric_tracker_mozambique loaded")
+except ImportError as e:
+    MOZAMBIQUE_RHETORIC_AVAILABLE = False
+    print(f"[Africa] ⚠️ rhetoric_tracker_mozambique not yet available: {e}")
+
 
 # ============================================================
 # FLASK APP
@@ -1639,11 +1664,13 @@ COUNTRY_CONFIG = {
         'name':              'Mozambique',
         'flag':              '\U0001f1f2\U0001f1ff',  # MZ flag
         'base_conflict_pct': 48,
-        'context': ('IS-Mozambique insurgency intensifying in Cabo Delgado: '
-                    'N380 corridor ambushes, maritime attacks. ~2,000 Rwandan '
-                    'troops reinforced + Tanzanian border force. Chapo dialogue '
-                    'overtures alongside military push. Post-2024 election '
-                    'tensions persist. LNG restart stakes.'),
+        # Nov 27 2026: refreshed (the Jul 2026 text had ~2,000 Rwandan troops and LNG still frozen).
+        'context': ('Islamic State insurgency in Cabo Delgado spreading south and west '
+                    '(Muidumbe, Macomia, Montepuez, into Niassa) away from the guarded LNG '
+                    'coast; 661K still displaced. 6,300+ Rwandan troops guard Palma-Mocimboa; '
+                    'TotalEnergies LNG fully restarted Jan 2026 (first LNG 2029), ExxonMobil '
+                    'Rovuma FID due. Debt above 90% of GDP, no IMF programme (decision Dec 2026). '
+                    'Mondlane on trial; Chapo is Frelimo\'s 2029 candidate.'),
         'labels': {
             'low':    'Contained insurgency baseline',
             'medium': 'Insurgent tempo rising',
@@ -2586,6 +2613,25 @@ if RWANDA_RHETORIC_AVAILABLE:
     except Exception as e:
         print(f'[Africa] ⚠️ Rwanda rhetoric registration failed: {e}')
 
+if MOZAMBIQUE_HUMANITARIAN_AVAILABLE:
+    try:
+        register_mozambique_humanitarian_endpoints(app)
+    except Exception as e:
+        print(f'[Africa] ⚠️ Mozambique humanitarian registration failed: {e}')
+
+if MOZAMBIQUE_FINANCIAL_AVAILABLE:
+    try:
+        register_mozambique_financial_endpoints(app, start_background=True)
+    except Exception as e:
+        print(f'[Africa] ⚠️ Mozambique financial registration failed: {e}')
+
+if MOZAMBIQUE_RHETORIC_AVAILABLE:
+    try:
+        register_mozambique_rhetoric_routes(app, start_background=True)
+        print('[Africa] ✅ Mozambique rhetoric endpoints registered (12h scheduler ON)')
+    except Exception as e:
+        print(f'[Africa] ⚠️ Mozambique rhetoric registration failed: {e}')
+
 
 # ============================================================
 # BOOT
@@ -2616,6 +2662,8 @@ _drc_mods = [DRC_HUMANITARIAN_AVAILABLE, DRC_FINANCIAL_AVAILABLE, DRC_RHETORIC_A
 print(f'  DRC:       {"✅ humanitarian + financial + rhetoric" if all(_drc_mods) else f"⏳ {sum(_drc_mods)}/3 loaded"}')
 _rw_mods = [RWANDA_HUMANITARIAN_AVAILABLE, RWANDA_FINANCIAL_AVAILABLE, RWANDA_RHETORIC_AVAILABLE]
 print(f'  Rwanda:    {"✅ humanitarian + financial + rhetoric" if all(_rw_mods) else f"⏳ {sum(_rw_mods)}/3 loaded"}')
+_moz_mods = [MOZAMBIQUE_HUMANITARIAN_AVAILABLE, MOZAMBIQUE_FINANCIAL_AVAILABLE, MOZAMBIQUE_RHETORIC_AVAILABLE]
+print(f'  Mozambique:{"✅ humanitarian + financial + rhetoric" if all(_moz_mods) else f" ⏳ {sum(_moz_mods)}/3 loaded"}')
 print('=' * 60)
 
 
