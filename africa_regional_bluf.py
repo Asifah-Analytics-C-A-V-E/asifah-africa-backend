@@ -89,7 +89,7 @@ except ImportError:
 # ONE version string, read by the payload, the debug route and every log line.
 # Three hand-maintained copies is how this file spent weeks reporting v1.0.0
 # in /debug while the payload said v1.0.1.
-MODULE_VERSION = '1.2.6'   # Nov 27 2026 (c): rebuild early when a new tracker is configured. 1.2.5 Nov 27 2026 (b): DRC tracker live + Uganda resident hub. 1.2.4 Nov 27 2026: no doubled country prefix when a tracker leads with its flag. 1.2.3 Nov 22 2026: CAR tracker live + standing-insurgency entry. 1.2.2 Nov 21 2026: Niger tracker live + standing-insurgency vocabulary. 1.2.1 Nov 15 2026: standing-war vocabulary (Sudan)
+MODULE_VERSION = '1.2.7'   # Nov 27 2026 (d): Rwanda HUB tracker joins the rollup. 1.2.6 Nov 27 2026 (c): rebuild early when a new tracker is configured. 1.2.5 Nov 27 2026 (b): DRC tracker live + Uganda resident hub. 1.2.4 Nov 27 2026: no doubled country prefix when a tracker leads with its flag. 1.2.3 Nov 22 2026: CAR tracker live + standing-insurgency entry. 1.2.2 Nov 21 2026: Niger tracker live + standing-insurgency vocabulary. 1.2.1 Nov 15 2026: standing-war vocabulary (Sudan)
 
 UPSTASH_REDIS_URL   = (os.environ.get('UPSTASH_REDIS_URL')
                        or os.environ.get('UPSTASH_REDIS_REST_URL') or '')
@@ -122,6 +122,10 @@ TRACKER_KEYS = {
     'drc':          'rhetoric:drc:latest',   # v1.0 Nov 27 2026 -- three standing fronts (South Kivu, North
                                             # Kivu, Ituri) on kinetic ladders; deal-vs-ground axis; spokes
                                             # on Rwanda, Uganda, US, China, UAE; ripple chains per actor.
+    'rwanda':       'rhetoric:rwanda:latest', # v1.0 Nov 27 2026 -- HUB tracker (first Africa tracker built
+                                            # hub-first). Reads its own wheel (CAR, DRC, Mozambique) via
+                                            # spoke_wheel_reader; export-vs-pressure axis; L5 only from the
+                                            # home-soil ladder. Writes spoke:us:rwanda and spoke:china:rwanda.
     # 'ethiopia':     'rhetoric:ethiopia:latest',
     # 'nigeria':      'rhetoric:nigeria:latest',
 }
@@ -134,6 +138,7 @@ THEATRE_FLAGS = {
     'niger':        '\U0001F1F3\U0001F1EA',  # NE
     'car':          '\U0001F1E8\U0001F1EB',  # CF
     'drc':          '\U0001F1E8\U0001F1E9',  # CD
+    'rwanda':       '\U0001F1F7\U0001F1FC',  # RW
     'ethiopia':     '\U0001F1EA\U0001F1F9',  # ET
     'nigeria':      '\U0001F1F3\U0001F1EC',  # NG
 }
@@ -146,6 +151,7 @@ THEATRE_DISPLAY = {
     'niger':        'NIGER',
     'car':          'CENTRAL AFRICAN REPUBLIC',
     'drc':          'DR CONGO',
+    'rwanda':       'RWANDA',
     'ethiopia':     'ETHIOPIA',
     'nigeria':      'NIGERIA',
 }
