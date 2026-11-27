@@ -262,6 +262,31 @@ except ImportError as e:
     CAR_RHETORIC_AVAILABLE = False
     print(f"[Africa] ⚠️ rhetoric_tracker_car not yet available: {e}")
 
+# Democratic Republic of the Congo (Nov 27 2026) -- stability sensors, then the rhetoric tracker.
+try:
+    from drc_humanitarian import register_drc_humanitarian_endpoints
+    DRC_HUMANITARIAN_AVAILABLE = True
+    print("[Africa] ✅ drc_humanitarian loaded")
+except ImportError as e:
+    DRC_HUMANITARIAN_AVAILABLE = False
+    print(f"[Africa] ⚠️ drc_humanitarian not yet available: {e}")
+
+try:
+    from drc_financial import register_drc_financial_endpoints
+    DRC_FINANCIAL_AVAILABLE = True
+    print("[Africa] ✅ drc_financial loaded")
+except ImportError as e:
+    DRC_FINANCIAL_AVAILABLE = False
+    print(f"[Africa] ⚠️ drc_financial not yet available: {e}")
+
+try:
+    from rhetoric_tracker_drc import register_drc_rhetoric_routes
+    DRC_RHETORIC_AVAILABLE = True
+    print("[Africa] ✅ rhetoric_tracker_drc loaded")
+except ImportError as e:
+    DRC_RHETORIC_AVAILABLE = False
+    print(f"[Africa] ⚠️ rhetoric_tracker_drc not yet available: {e}")
+
 
 # ============================================================
 # FLASK APP
@@ -838,9 +863,13 @@ COUNTRY_CONFIG = {
         'name':              'Democratic Republic of Congo',
         'flag':              '\U0001f1e8\U0001f1e9',  # 🇨🇩
         'base_conflict_pct': 65,
-        'context': ('Active Ebola Bundibugyo PHEIC since May 15 2026 (Ituri / '
-                    'Nord-Kivu / Sud-Kivu, ~750 suspected cases). M23 advance '
-                    'eastern provinces, Rwanda-backed. Cobalt convergence anchor.'),
+        # Nov 27 2026: refreshed; M23-Rwanda link ATTRIBUTED, never asserted.
+        'context': ('Bundibugyo Ebola is a WHO global health emergency (since May 17 '
+                    '2026; 11,613 confirmed cases and 5,678 deaths by Nov 17, worst in '
+                    'Ituri and North Kivu). Kabila\'s FRN coalition (M23/AFC inside it, '
+                    'Oct 12 2026) is on the offensive in South Kivu; UN experts and the US '
+                    'say Rwanda backs M23 (Kigali denies it). Washington Accords stalled. '
+                    'Cobalt and copper convergence anchor.'),
         'labels': {
             'low':    'Routine eastern instability',
             'medium': 'Ebola spread + M23 pressure',
@@ -925,9 +954,12 @@ COUNTRY_CONFIG = {
         'name':              'Rwanda',
         'flag':              '\U0001f1f7\U0001f1fc',  # 🇷🇼
         'base_conflict_pct': 28,
-        'context': ('Partial border closure with DRC over Ebola (May 2026). '
-                    'M23 backing pressure / sanctions risk. Kagame regime stable '
-                    'but increasingly isolated diplomatically.'),
+        # Nov 27 2026: refreshed.
+        'context': ('US sanctioned Rwanda\'s Ministry of Defence (Oct 28 2026) over '
+                    'alleged M23 support, which Kigali rejects; AGOA exclusion from Jan '
+                    '2027. Washington Accords stalled on the FDLR and Rwanda\'s '
+                    '"defensive measures". Troops in CAR and Mozambique. Kagame regime '
+                    'stable but under rising external pressure.'),
         'labels': {
             'low':    'Routine',
             'medium': 'Border tension',
@@ -2491,6 +2523,25 @@ if CAR_RHETORIC_AVAILABLE:
     except Exception as e:
         print(f'[Africa] ⚠️ CAR rhetoric registration failed: {e}')
 
+if DRC_HUMANITARIAN_AVAILABLE:
+    try:
+        register_drc_humanitarian_endpoints(app)
+    except Exception as e:
+        print(f'[Africa] ⚠️ DRC humanitarian registration failed: {e}')
+
+if DRC_FINANCIAL_AVAILABLE:
+    try:
+        register_drc_financial_endpoints(app, start_background=True)
+    except Exception as e:
+        print(f'[Africa] ⚠️ DRC financial registration failed: {e}')
+
+if DRC_RHETORIC_AVAILABLE:
+    try:
+        register_drc_rhetoric_routes(app, start_background=True)
+        print('[Africa] ✅ DRC rhetoric endpoints registered (12h scheduler ON)')
+    except Exception as e:
+        print(f'[Africa] ⚠️ DRC rhetoric registration failed: {e}')
+
 
 # ============================================================
 # BOOT
@@ -2517,6 +2568,8 @@ _ne_mods = [NIGER_HUMANITARIAN_AVAILABLE, NIGER_FINANCIAL_AVAILABLE, NIGER_RHETO
 print(f'  Niger:     {"✅ humanitarian + financial + rhetoric" if all(_ne_mods) else f"⏳ {sum(_ne_mods)}/3 loaded"}')
 _car_mods = [CAR_HUMANITARIAN_AVAILABLE, CAR_FINANCIAL_AVAILABLE, CAR_RHETORIC_AVAILABLE]
 print(f'  CAR:       {"✅ humanitarian + financial + rhetoric" if all(_car_mods) else f"⏳ {sum(_car_mods)}/3 loaded"}')
+_drc_mods = [DRC_HUMANITARIAN_AVAILABLE, DRC_FINANCIAL_AVAILABLE, DRC_RHETORIC_AVAILABLE]
+print(f'  DRC:       {"✅ humanitarian + financial + rhetoric" if all(_drc_mods) else f"⏳ {sum(_drc_mods)}/3 loaded"}')
 print('=' * 60)
 
 
