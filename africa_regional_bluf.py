@@ -89,7 +89,7 @@ except ImportError:
 # ONE version string, read by the payload, the debug route and every log line.
 # Three hand-maintained copies is how this file spent weeks reporting v1.0.0
 # in /debug while the payload said v1.0.1.
-MODULE_VERSION = '1.2.4'   # Nov 27 2026: no doubled country prefix when a tracker leads with its flag. 1.2.3 Nov 22 2026: CAR tracker live + standing-insurgency entry. 1.2.2 Nov 21 2026: Niger tracker live + standing-insurgency vocabulary. 1.2.1 Nov 15 2026: standing-war vocabulary (Sudan)
+MODULE_VERSION = '1.2.5'   # Nov 27 2026 (b): DRC tracker live + Uganda resident hub. 1.2.4 Nov 27 2026: no doubled country prefix when a tracker leads with its flag. 1.2.3 Nov 22 2026: CAR tracker live + standing-insurgency entry. 1.2.2 Nov 21 2026: Niger tracker live + standing-insurgency vocabulary. 1.2.1 Nov 15 2026: standing-war vocabulary (Sudan)
 
 UPSTASH_REDIS_URL   = (os.environ.get('UPSTASH_REDIS_URL')
                        or os.environ.get('UPSTASH_REDIS_REST_URL') or '')
@@ -119,7 +119,9 @@ TRACKER_KEYS = {
                                             # China, US); three standing fronts on a kinetic ladder,
                                             # L5 only from a front or an attack on Bangui. Guard axis
                                             # (who guards Touadera) rides inside the Russia spoke.
-    # 'drc':          'rhetoric:drc:latest',
+    'drc':          'rhetoric:drc:latest',   # v1.0 Nov 27 2026 -- three standing fronts (South Kivu, North
+                                            # Kivu, Ituri) on kinetic ladders; deal-vs-ground axis; spokes
+                                            # on Rwanda, Uganda, US, China, UAE; ripple chains per actor.
     # 'ethiopia':     'rhetoric:ethiopia:latest',
     # 'nigeria':      'rhetoric:nigeria:latest',
 }
@@ -376,6 +378,9 @@ STANDING_INSURGENCIES = {
     # northeast), running since 2013. Same contract as Niger: the words change only
     # when a standing front sets the level this cycle.
     'car':   'armed-group conflict on three fronts (northwest, southeast, northeast), running since 2013',
+    # v1.2.5 Nov 27 2026 -- DRC: the eastern war (South Kivu, North Kivu, Ituri). M23's
+    # current campaign dates to 2021-22; armed conflict in the east to the 1990s.
+    'drc':   'war in the east on three fronts (South Kivu, North Kivu, Ituri), the M23 campaign running since 2021',
 }
 STANDING_INSURGENCY_STATE = {
     0: 'insurgency continuing: no reporting reached the scanners (unread, not calm)',
@@ -387,6 +392,29 @@ STANDING_INSURGENCY_STATE = {
     6: 'red line breached',
 }
 _STANDING_NOW = {}   # theatre -> True when a standing front sets this cycle's level
+
+
+# ── VECTOR VOCABULARY (v1.2.5 Nov 27 2026) ───────────────────────────
+# "resource leverage -- armed incident (L4)" is false: a vector that is not
+# kinetic must not borrow the kinetic ladder's words. Vectors with an axis get
+# that axis's words; vectors with no fitting vocabulary (regime security,
+# alignment) get the platform label, which claims nothing about violence.
+VECTOR_PRESSURE = {
+    'resource_leverage': 'economic', 'lifelines': 'economic', 'commercial_capture': 'economic',
+    'blockade': 'economic', 'china_commercial': 'economic', 'maritime': 'economic',
+    'epidemic': 'humanitarian',
+    'peace_tracks': 'diplomatic', 'peace_track': 'diplomatic', 'diplomatic': 'diplomatic',
+    'insurgent_fronts': 'kinetic', 'kinetic': 'kinetic', 'insurgent_contest': 'kinetic',
+    'shabaab': 'kinetic', 'isis': 'kinetic',
+}
+
+
+def _vector_named(vector, level):
+    name = vector.replace('_', ' ')
+    pt = VECTOR_PRESSURE.get(vector)
+    if pt:
+        return _ts_named(name, level, pressure_type=pt)
+    return '%s (L%s %s)' % (name, level, ESCALATION_LABELS.get(_safe_int(level), ''))
 
 
 def _standing_driven(theatre, raw_data, threat):
@@ -992,7 +1020,7 @@ def _build_bluf_prose(posture, trackers, missing):
         hot = sorted(((k, _safe_int(v)) for k, v in vl.items() if _safe_int(v) >= 3),
                      key=lambda kv: kv[1], reverse=True)
         if hot:
-            names = ', '.join(_ts_named(k.replace('_', ' '), v) for k, v in hot[:4])
+            names = ', '.join(_vector_named(k, v) for k, v in hot[:4])
             parts.append('Lead vectors: %s.' % names)
 
         # Junction read -- the marquee
@@ -1362,7 +1390,7 @@ def _build_signals(posture, trackers):
 # TRACKER_KEYS, so the Sahel bundle joins the emanating scan the moment those
 # trackers register. Wagner spokes across Mali/Niger/Burkina Faso and the
 # future BRI spokes need no edit here and none in the frontend.
-RESIDENT_HUBS = ['rwanda']
+RESIDENT_HUBS = ['rwanda', 'uganda']   # v1.2.5: Uganda, a small wheel (DRC first)
 
 
 def _build_convergence_panel():
